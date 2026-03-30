@@ -256,6 +256,11 @@
         debugLogs: !1,
         humanizationEnabled: false,
         humProfile: "balanced",
+        humMoveQuality: 88,
+        humAdaptiveTiming: 65,
+        humComplexitySense: 60,
+        humTimePressureSense: 70,
+        humVariance: 30,
         humTimingScale: 50,
         humTimingJitter: 25,
         humTimingSpikeChance: 8,
@@ -1103,6 +1108,12 @@ self.fetch = function(url, opts) {
         if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
         return null;
     }
+    function getHumanProfilePreset(profile) {
+        if (profile === "cautious") return { delay: 1.15, depth: 1.08, mistake: 0.55 };
+        if (profile === "chaotic") return { delay: 0.95, depth: 0.92, mistake: 1.4 };
+        if (profile === "blitz") return { delay: 0.7, depth: 0.82, mistake: 1.25 };
+        return { delay: 1, depth: 1, mistake: 1 };
+    }
     function getHumanizationPreview(fen, depthInput = settings.depth) {
         const depthBase = clamp(parseInt(depthInput) || 1, 1, 40);
         const minBase = Math.max(0, parseFloat(settings.minDelay) || 0);
@@ -1114,59 +1125,45 @@ self.fetch = function(url, opts) {
             delayMinBase: minBase,
             delayMaxBase: maxBase,
             delayMinFinal: minBase,
-            delayMaxFinal: maxBase
+            delayMaxFinal: maxBase,
+            moveQuality: clamp(parseInt(settings.humMoveQuality) || 88, 30, 100),
+            altMoveChance: 0
         };
         if (!settings.humanizationEnabled) return preview;
-
+        const profile = getHumanProfilePreset(settings.humProfile);
         const pieces = countPiecesFromFen(fen);
-        const complexityLevel = clamp((32 - pieces) / 18, 0, 1);
-        const complexityFactor = (settings.humComplexityWeight / 100) * complexityLevel;
-        const phaseBoost = pieces > 26 ? (settings.humOpeningBoost || 0) : 0;
-        const phaseDrop = pieces < 12 ? (settings.humEndgameDrop || 0) : 0;
+        const complexityLevel = clamp((32 - pieces) / 20, 0, 1);
+        const complexitySense = clamp((settings.humComplexitySense || 0) / 100, 0, 1);
+        const adaptiveTiming = clamp((settings.humAdaptiveTiming || 0) / 100, 0, 1);
+        const pressureSense = clamp((settings.humTimePressureSense || 0) / 100, 0, 1);
+        const variance = clamp((settings.humVariance || 0) / 100, 0, 1);
         const clockSec = readPlayerClockSeconds();
-        const panic = clockSec !== null && clockSec < settings.humClockPanic;
-        const stable = clockSec !== null && clockSec > settings.humClockStabilize;
-
-        const profileMult = settings.humProfile === "cautious" ? 1.08 : settings.humProfile === "chaotic" ? 1.18 : settings.humProfile === "blitz" ? 0.86 : 1;
-        let delayMin = minBase * (1 + (settings.humTimingScale / 100) * 0.7) * profileMult;
-        let delayMax = maxBase * (1 + (settings.humTimingScale / 100)) * profileMult;
-        delayMin += complexityFactor * (settings.humComplexityDelayBoost || 0);
-        delayMax += complexityFactor * ((settings.humComplexityDelayBoost || 0) + 0.25);
-        if (panic) { delayMin *= 0.75; delayMax *= 0.85; }
-        if (stable) {
-            const d = Math.max(0, settings.humClockStabilizeDelayDrop || 0);
-            delayMin = Math.max(0, delayMin - d);
-            delayMax = Math.max(delayMin, delayMax - d);
+        const panic = clockSec !== null && clockSec < 20;
+        const comfortable = clockSec !== null && clockSec > 50;
+        const complexityBoost = complexityLevel * complexitySense;
+        let delayMin = minBase * profile.delay;
+        let delayMax = maxBase * profile.delay;
+        delayMin += adaptiveTiming * complexityBoost * 0.8;
+        delayMax += adaptiveTiming * complexityBoost * 1.5;
+        if (panic) {
+            const panicCut = 0.45 * pressureSense;
+            delayMin *= (1 - panicCut);
+            delayMax *= (1 - panicCut * 0.9);
+        } else if (comfortable) {
+            delayMin += pressureSense * 0.25;
+            delayMax += pressureSense * 0.55;
         }
-        if (Math.random() < (settings.humTimingSpikeChance / 100)) {
-            delayMax += Math.max(0, settings.humTimingSpikeBonus || 0);
-        }
-        if (Math.random() < (settings.humBurstWindow / 100)) {
-            const bd = Math.max(0, settings.humBurstDelayDrop || 0);
-            delayMin = Math.max(0, delayMin - bd);
-            delayMax = Math.max(delayMin, delayMax - bd * 0.7);
-        }
-        const jitter = Math.max(0, settings.humTimingJitter || 0) / 100;
+        const jitter = variance * 0.8;
         delayMin = Math.max(0, delayMin + ((Math.random() * 2 - 1) * jitter));
-        delayMax = Math.max(delayMin, delayMax + ((Math.random() * 2 - 1) * jitter * 1.5));
-        if (Math.random() < (settings.humMicroPauseChance / 100)) {
-            const pause = Math.max(0, settings.humMicroPauseMs || 0) / 1000;
-            delayMin += pause * 0.5;
-            delayMax += pause;
-        }
+        delayMax = Math.max(delayMin, delayMax + ((Math.random() * 2 - 1) * jitter * 1.4));
 
-        let depthFinal = depthBase;
-        depthFinal += Math.round((settings.humDepthScale / 100) * 1.6);
-        depthFinal += Math.round(phaseBoost - phaseDrop);
-        depthFinal += Math.round(complexityFactor * (settings.humComplexityDepthBoost || 0));
-        if (panic) depthFinal -= Math.max(0, settings.humClockPanicDepthDrop || 0);
-        if (Math.random() < (settings.humDepthBlunderChance / 100)) depthFinal -= Math.max(0, settings.humDepthBlunderPenalty || 0);
-        if (Math.random() < (settings.humTiltChance / 100)) depthFinal -= Math.max(0, settings.humTiltDepthDrop || 0);
-        if (Math.random() < (settings.humBurstWindow / 100)) depthFinal -= Math.max(0, settings.humBurstDepthDrop || 0);
-        const depthJ = Math.max(0, settings.humDepthJitter || 0);
-        depthFinal += Math.round((Math.random() * 2 - 1) * depthJ);
-        const streakAdj = (settings.humStreakiness || 0) / 100;
-        depthFinal += Math.round((Math.random() < 0.5 ? -1 : 1) * streakAdj);
+        const qualityPenalty = clamp((100 - preview.moveQuality) / 100, 0, 0.7);
+        let depthFinal = depthBase * profile.depth;
+        depthFinal += Math.round(adaptiveTiming * complexityBoost * 3);
+        depthFinal -= Math.round(qualityPenalty * 7);
+        if (panic) depthFinal -= Math.round(pressureSense * 2.5);
+        depthFinal += Math.round((Math.random() * 2 - 1) * (variance * 1.8));
+        preview.altMoveChance = clamp(parseFloat((qualityPenalty * profile.mistake * (0.55 + complexityLevel * 0.25)).toFixed(2)), 0, 0.8);
 
         preview.depthFinal = clamp(depthFinal, 1, 40);
         preview.delayMinFinal = parseFloat(delayMin.toFixed(2));
@@ -1222,21 +1219,69 @@ self.fetch = function(url, opts) {
         updateUI();
         state.currentCloudRequest = GM_xmlhttpRequest({
             method: "GET", url, timeout: 20000,
-            onload: (res) => handleSF16Response(res),
+            onload: (res) => handleSF16Response(res, finalFEN, actualDepth),
             onerror: (err) => { handleError("Network Error (SF16)", err); triggerFallback(); },
             ontimeout: () => { handleError("Timeout (SF16 20s)"); triggerFallback(); },
         });
     }
-    function handleSF16Response(response) {
+    function maybeUseAlternateCloudMove(finalFEN, mainDepth, primaryMove, done) {
+        const preview = getHumanizationPreview(finalFEN, mainDepth);
+        if (!preview.enabled || preview.altMoveChance <= 0 || Math.random() >= preview.altMoveChance) { done(primaryMove); return; }
+        const altDepth = clamp(Math.round(mainDepth * 0.55), 4, Math.max(4, mainDepth - 2));
+        GM_xmlhttpRequest({
+            method: "POST", url: "https://chess-api.com/v1",
+            headers: { "Content-Type": "application/json" },
+            data: JSON.stringify({
+                fen: finalFEN,
+                depth: altDepth,
+                maxThinkingTime: Math.min(settings.maxThinkingTime, CONFIG.API.MAX_TIME),
+                taskId: Math.random().toString(36).substring(7)
+            }),
+            timeout: 8000,
+            onload: (res) => {
+                try {
+                    const rawData = JSON.parse(res.responseText);
+                    const result = Array.isArray(rawData) ? rawData[0] : rawData;
+                    const altMove = result?.move || result?.bestmove || primaryMove;
+                    done(altMove || primaryMove);
+                } catch (_) { done(primaryMove); }
+            },
+            onerror: () => done(primaryMove),
+            ontimeout: () => done(primaryMove),
+        });
+    }
+    function maybeUseAlternateSFMove(finalFEN, mainDepth, primaryMove, done) {
+        const preview = getHumanizationPreview(finalFEN, mainDepth);
+        if (!preview.enabled || preview.altMoveChance <= 0 || Math.random() >= preview.altMoveChance) { done(primaryMove); return; }
+        const altDepth = clamp(Math.round(mainDepth * 0.55), 4, Math.max(4, mainDepth - 2));
+        const url = `https://stockfish.online/api/s/v2.php?fen=${encodeURIComponent(finalFEN)}&depth=${altDepth}&mode=bestmove`;
+        GM_xmlhttpRequest({
+            method: "GET", url, timeout: 8000,
+            onload: (res) => {
+                try {
+                    const data = JSON.parse(res.responseText);
+                    const altMove = (data?.bestmove ? (data.bestmove.split(" ")[1] || data.bestmove) : null) || primaryMove;
+                    done(altMove);
+                } catch (_) { done(primaryMove); }
+            },
+            onerror: () => done(primaryMove),
+            ontimeout: () => done(primaryMove),
+        });
+    }
+    function handleSF16Response(response, sentFEN, sentDepth) {
         state.isThinking = !1;
         state.lastResponse = response.responseText;
         try {
             if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
             const data = JSON.parse(response.responseText);
             if (!data.success || !data.bestmove) { triggerFallback(); return; }
-            const bestMove = data.bestmove.split(" ")[1] || data.bestmove;
             const duration = ((performance.now() - state.analysisStartTime) / 1000).toFixed(2);
-            processBestMove(bestMove, data.evaluation, data.mate, data.continuation ? data.continuation.split(" ") : null, null, duration, true);
+            const bestMove = data.bestmove.split(" ")[1] || data.bestmove;
+            maybeUseAlternateSFMove(sentFEN, sentDepth, bestMove, (finalMove) => {
+                processBestMove(finalMove, data.evaluation, data.mate, data.continuation ? data.continuation.split(" ") : null, null, duration, true);
+                updateUI();
+            });
+            return;
         } catch (e) { triggerFallback(); }
         updateUI();
     }
@@ -1259,7 +1304,12 @@ self.fetch = function(url, opts) {
             }
             if (result.move || result.bestmove) {
                 const duration = ((performance.now() - state.analysisStartTime) / 1000).toFixed(2);
-                processBestMove(result.move || result.bestmove, result.eval, result.mate, result.continuationArr, result.winChance, duration, true);
+                const bestMove = result.move || result.bestmove;
+                maybeUseAlternateCloudMove(sentFEN, depth, bestMove, (finalMove) => {
+                    processBestMove(finalMove, result.eval, result.mate, result.continuationArr, result.winChance, duration, true);
+                    updateUI();
+                });
+                return;
             } else { triggerFallback(); }
         } catch (e) { triggerFallback(); }
         updateUI();
@@ -2360,7 +2410,7 @@ self.fetch = function(url, opts) {
             <div id="histModalOv">
                 <div id="histModal">
                     <div class="modal-header">
-                        <h3 style="color:var(--bot-p);">Humanization Lab</h3>
+                        <h3 style="color:var(--bot-p);">Humanization</h3>
                         <button id="histModalClose">×</button>
                     </div>
                     <div class="modal-content" style="display:flex; flex-direction:column; gap:10px;">
@@ -2369,47 +2419,30 @@ self.fetch = function(url, opts) {
                                 <label>Enable Humanization</label>
                                 <input type="checkbox" id="chkHumanEnabled" ${settings.humanizationEnabled ? "checked" : ""}>
                             </div>
-                            <div class="sect-note">Off by default. Turn on only when you want depth and delay to be automatically humanized.</div>
+                            <div class="sect-note">Off by default. When enabled, it dynamically changes delay, depth, and occasionally uses a shallower move to avoid always playing top-engine choices.</div>
                         </div>
                         <div class="sect">
                             <div class="row">
-                                <label>Profile</label>
+                                <label>Play Style</label>
                                 <select id="humProfile">
-                                    <option value="balanced"${settings.humProfile==="balanced"?" selected":""}>Balanced</option>
+                                    <option value="balanced"${settings.humProfile==="balanced"?" selected":""}>Balanced (recommended)</option>
                                     <option value="cautious"${settings.humProfile==="cautious"?" selected":""}>Cautious</option>
                                     <option value="chaotic"${settings.humProfile==="chaotic"?" selected":""}>Chaotic</option>
-                                    <option value="blitz"${settings.humProfile==="blitz"?" selected":""}>Blitz</option>
+                                    <option value="blitz"${settings.humProfile==="blitz"?" selected":""}>Blitz/Fast</option>
                                 </select>
                             </div>
-                            <div class="row"><label>Timing Scale</label><input type="range" id="humTimingScale" min="0" max="100" value="${settings.humTimingScale}"></div>
-                            <div class="row"><label>Timing Jitter</label><input type="range" id="humTimingJitter" min="0" max="100" value="${settings.humTimingJitter}"></div>
-                            <div class="row"><label>Spike Chance %</label><input type="number" id="humTimingSpikeChance" min="0" max="100" value="${settings.humTimingSpikeChance}" style="width:70px;"></div>
-                            <div class="row"><label>Spike Bonus (s)</label><input type="number" id="humTimingSpikeBonus" min="0" max="10" step="0.1" value="${settings.humTimingSpikeBonus}" style="width:70px;"></div>
-                            <div class="row"><label>Micro-pause %</label><input type="number" id="humMicroPauseChance" min="0" max="100" value="${settings.humMicroPauseChance}" style="width:70px;"></div>
-                            <div class="row"><label>Micro-pause (ms)</label><input type="number" id="humMicroPauseMs" min="0" max="3000" value="${settings.humMicroPauseMs}" style="width:70px;"></div>
+                            <div class="row"><label>Move Quality</label><input type="range" id="humMoveQuality" min="30" max="100" value="${settings.humMoveQuality || 88}"></div>
+                            <div class="sect-note">Higher = stronger moves. Lower = more human inaccuracies and occasional shallower-choice moves.</div>
+                            <div class="row"><label>Adaptive Timing</label><input type="range" id="humAdaptiveTiming" min="0" max="100" value="${settings.humAdaptiveTiming || 65}"></div>
+                            <div class="sect-note">How much think time changes with position complexity.</div>
                         </div>
                         <div class="sect">
-                            <div class="row"><label>Depth Bias</label><input type="range" id="humDepthScale" min="0" max="100" value="${settings.humDepthScale}"></div>
-                            <div class="row"><label>Depth Jitter</label><input type="number" id="humDepthJitter" min="0" max="8" value="${settings.humDepthJitter}" style="width:70px;"></div>
-                            <div class="row"><label>Blunder Chance %</label><input type="number" id="humDepthBlunderChance" min="0" max="100" value="${settings.humDepthBlunderChance}" style="width:70px;"></div>
-                            <div class="row"><label>Blunder Penalty</label><input type="number" id="humDepthBlunderPenalty" min="0" max="10" value="${settings.humDepthBlunderPenalty}" style="width:70px;"></div>
-                            <div class="row"><label>Opening Boost</label><input type="number" id="humOpeningBoost" min="0" max="10" value="${settings.humOpeningBoost}" style="width:70px;"></div>
-                            <div class="row"><label>Endgame Drop</label><input type="number" id="humEndgameDrop" min="0" max="10" value="${settings.humEndgameDrop}" style="width:70px;"></div>
-                            <div class="row"><label>Complexity Weight</label><input type="range" id="humComplexityWeight" min="0" max="100" value="${settings.humComplexityWeight}"></div>
-                            <div class="row"><label>Complexity Depth+</label><input type="number" id="humComplexityDepthBoost" min="0" max="8" value="${settings.humComplexityDepthBoost}" style="width:70px;"></div>
-                            <div class="row"><label>Complexity Delay+</label><input type="number" id="humComplexityDelayBoost" min="0" max="5" step="0.1" value="${settings.humComplexityDelayBoost}" style="width:70px;"></div>
-                        </div>
-                        <div class="sect">
-                            <div class="row"><label>Panic Clock (s)</label><input type="number" id="humClockPanic" min="1" max="120" value="${settings.humClockPanic}" style="width:70px;"></div>
-                            <div class="row"><label>Panic Depth Drop</label><input type="number" id="humClockPanicDepthDrop" min="0" max="8" value="${settings.humClockPanicDepthDrop}" style="width:70px;"></div>
-                            <div class="row"><label>Stable Clock (s)</label><input type="number" id="humClockStabilize" min="1" max="600" value="${settings.humClockStabilize}" style="width:70px;"></div>
-                            <div class="row"><label>Stable Delay Drop</label><input type="number" id="humClockStabilizeDelayDrop" min="0" max="5" step="0.1" value="${settings.humClockStabilizeDelayDrop}" style="width:70px;"></div>
-                            <div class="row"><label>Streakiness</label><input type="range" id="humStreakiness" min="0" max="100" value="${settings.humStreakiness}"></div>
-                            <div class="row"><label>Tilt Chance %</label><input type="number" id="humTiltChance" min="0" max="100" value="${settings.humTiltChance}" style="width:70px;"></div>
-                            <div class="row"><label>Tilt Depth Drop</label><input type="number" id="humTiltDepthDrop" min="0" max="8" value="${settings.humTiltDepthDrop}" style="width:70px;"></div>
-                            <div class="row"><label>Burst Window %</label><input type="number" id="humBurstWindow" min="0" max="100" value="${settings.humBurstWindow}" style="width:70px;"></div>
-                            <div class="row"><label>Burst Depth Drop</label><input type="number" id="humBurstDepthDrop" min="0" max="5" value="${settings.humBurstDepthDrop}" style="width:70px;"></div>
-                            <div class="row"><label>Burst Delay Drop</label><input type="number" id="humBurstDelayDrop" min="0" max="5" step="0.1" value="${settings.humBurstDelayDrop}" style="width:70px;"></div>
+                            <div class="row"><label>Complexity Response</label><input type="range" id="humComplexitySense" min="0" max="100" value="${settings.humComplexitySense || 60}"></div>
+                            <div class="sect-note">Higher = bigger depth/time changes in tactical positions.</div>
+                            <div class="row"><label>Time Pressure Response</label><input type="range" id="humTimePressureSense" min="0" max="100" value="${settings.humTimePressureSense || 70}"></div>
+                            <div class="sect-note">Higher = faster and shallower decisions when your clock is low.</div>
+                            <div class="row"><label>Variance</label><input type="range" id="humVariance" min="0" max="100" value="${settings.humVariance || 30}"></div>
+                            <div class="sect-note">Adds natural inconsistency so moves and timing are less robotic.</div>
                         </div>
                         <div id="humPreview" class="hum-preview">Preview: Humanization disabled.</div>
                     </div>
@@ -3003,13 +3036,11 @@ self.fetch = function(url, opts) {
             if (state.ui.depthHumanizedDisplay) state.ui.depthHumanizedDisplay.innerText = p.enabled ? `Effective depth: ${p.depthFinal} (base ${p.depthBase})` : `Effective depth: ${p.depthBase}`;
             if (state.ui.delayHumanizedDisplay) state.ui.delayHumanizedDisplay.innerText = p.enabled ? `Effective range: ${p.delayMinFinal}s - ${p.delayMaxFinal}s` : `Effective range: ${p.delayMinBase}s - ${p.delayMaxBase}s`;
             if (state.ui.humPreview) state.ui.humPreview.innerText = p.enabled
-                ? `Live Profile=${settings.humProfile} | Depth ${p.depthBase}→${p.depthFinal} | Delay ${p.delayMinBase}s-${p.delayMaxBase}s → ${p.delayMinFinal}s-${p.delayMaxFinal}s`
+                ? `Profile: ${settings.humProfile} | Move quality: ${p.moveQuality}% | Depth ${p.depthBase}→${p.depthFinal} | Delay ${p.delayMinBase}s-${p.delayMaxBase}s → ${p.delayMinFinal}s-${p.delayMaxFinal}s | Alt-move chance: ${Math.round((p.altMoveChance || 0) * 100)}%`
                 : "Preview: Humanization disabled.";
         };
         [
-            "chkHumanEnabled","humProfile","humTimingScale","humTimingJitter","humTimingSpikeChance","humTimingSpikeBonus","humMicroPauseChance","humMicroPauseMs",
-            "humDepthScale","humDepthJitter","humDepthBlunderChance","humDepthBlunderPenalty","humOpeningBoost","humEndgameDrop","humComplexityWeight","humComplexityDepthBoost","humComplexityDelayBoost",
-            "humClockPanic","humClockPanicDepthDrop","humClockStabilize","humClockStabilizeDelayDrop","humStreakiness","humTiltChance","humTiltDepthDrop","humBurstWindow","humBurstDepthDrop","humBurstDelayDrop"
+            "chkHumanEnabled","humProfile","humMoveQuality","humAdaptiveTiming","humComplexitySense","humTimePressureSense","humVariance"
         ].forEach((id) => {
             const el = document.getElementById(id);
             if (!el) return;
