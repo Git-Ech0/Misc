@@ -211,7 +211,6 @@
         localMate: null,
         localPV: null,
         localDepth: null,
-        history: [],
         hasSavedCurrentGameResult: !1,
         lastSeenFEN: "",
         playingAs: null,
@@ -255,7 +254,36 @@
         themePrimary: "#81b64c",
         menuOpacity: 0.9,
         debugLogs: !1,
-        enableHistory: !0,
+        humanizationEnabled: false,
+        humProfile: "balanced",
+        humTimingScale: 50,
+        humTimingJitter: 25,
+        humTimingSpikeChance: 8,
+        humTimingSpikeBonus: 1.2,
+        humDepthScale: 45,
+        humDepthJitter: 2,
+        humDepthBlunderChance: 5,
+        humDepthBlunderPenalty: 3,
+        humOpeningBoost: 2,
+        humEndgameDrop: 1,
+        humClockPanic: 20,
+        humClockPanicDepthDrop: 2,
+        humClockStabilize: 35,
+        humClockStabilizeDelayDrop: 0.4,
+        humStreakiness: 30,
+        humTiltChance: 10,
+        humTiltDepthDrop: 2,
+        humTiltDelayBoost: 0.7,
+        humRhythm: 40,
+        humBurstWindow: 4,
+        humBurstDepthDrop: 1,
+        humBurstDelayDrop: 0.5,
+        humMicroPauseChance: 25,
+        humMicroPauseMs: 220,
+        humComplexityWeight: 35,
+        humComplexityDepthBoost: 2,
+        humComplexityDelayBoost: 0.8,
+        humPreviewLive: true,
         menuPosition: "top-right",
         localModelId: "sf18_05",
         // Per-model settings are stored under "m_<modelId>_<key>" via GM_setValue.
@@ -355,7 +383,6 @@
         });
         // Load per-model settings for the active model
         loadModelSettings(settings.localModelId || "sf18_05");
-        state.history = GM_getValue("bot_history", []);
     }
     // --- BOARD FEN LOGIC ---
     function getRawBoardFEN() {
@@ -1060,6 +1087,92 @@ self.fetch = function(url, opts) {
         if (state.lastSanitizedBoardFEN) analyzeLocal(state.lastSanitizedBoardFEN, settings.depth);
         updateUI();
     }
+    function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
+    function countPiecesFromFen(fen) {
+        if (!fen) return 32;
+        const board = fen.split(" ")[0] || "";
+        return (board.match(/[prnbqkPRNBQK]/g) || []).length;
+    }
+    function readPlayerClockSeconds() {
+        const clockBot = document.querySelector(".clock-bottom .clock-time-monospace, .clock-bottom");
+        if (!clockBot) return null;
+        const t = (clockBot.innerText || "").trim();
+        const p = t.split(":").map(v => parseInt(v, 10));
+        if (p.some(Number.isNaN)) return null;
+        if (p.length === 2) return p[0] * 60 + p[1];
+        if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+        return null;
+    }
+    function getHumanizationPreview(fen, depthInput = settings.depth) {
+        const depthBase = clamp(parseInt(depthInput) || 1, 1, 40);
+        const minBase = Math.max(0, parseFloat(settings.minDelay) || 0);
+        const maxBase = Math.max(minBase, parseFloat(settings.maxDelay) || minBase);
+        const preview = {
+            enabled: !!settings.humanizationEnabled,
+            depthBase,
+            depthFinal: depthBase,
+            delayMinBase: minBase,
+            delayMaxBase: maxBase,
+            delayMinFinal: minBase,
+            delayMaxFinal: maxBase
+        };
+        if (!settings.humanizationEnabled) return preview;
+
+        const pieces = countPiecesFromFen(fen);
+        const complexityLevel = clamp((32 - pieces) / 18, 0, 1);
+        const complexityFactor = (settings.humComplexityWeight / 100) * complexityLevel;
+        const phaseBoost = pieces > 26 ? (settings.humOpeningBoost || 0) : 0;
+        const phaseDrop = pieces < 12 ? (settings.humEndgameDrop || 0) : 0;
+        const clockSec = readPlayerClockSeconds();
+        const panic = clockSec !== null && clockSec < settings.humClockPanic;
+        const stable = clockSec !== null && clockSec > settings.humClockStabilize;
+
+        const profileMult = settings.humProfile === "cautious" ? 1.08 : settings.humProfile === "chaotic" ? 1.18 : settings.humProfile === "blitz" ? 0.86 : 1;
+        let delayMin = minBase * (1 + (settings.humTimingScale / 100) * 0.7) * profileMult;
+        let delayMax = maxBase * (1 + (settings.humTimingScale / 100)) * profileMult;
+        delayMin += complexityFactor * (settings.humComplexityDelayBoost || 0);
+        delayMax += complexityFactor * ((settings.humComplexityDelayBoost || 0) + 0.25);
+        if (panic) { delayMin *= 0.75; delayMax *= 0.85; }
+        if (stable) {
+            const d = Math.max(0, settings.humClockStabilizeDelayDrop || 0);
+            delayMin = Math.max(0, delayMin - d);
+            delayMax = Math.max(delayMin, delayMax - d);
+        }
+        if (Math.random() < (settings.humTimingSpikeChance / 100)) {
+            delayMax += Math.max(0, settings.humTimingSpikeBonus || 0);
+        }
+        if (Math.random() < (settings.humBurstWindow / 100)) {
+            const bd = Math.max(0, settings.humBurstDelayDrop || 0);
+            delayMin = Math.max(0, delayMin - bd);
+            delayMax = Math.max(delayMin, delayMax - bd * 0.7);
+        }
+        const jitter = Math.max(0, settings.humTimingJitter || 0) / 100;
+        delayMin = Math.max(0, delayMin + ((Math.random() * 2 - 1) * jitter));
+        delayMax = Math.max(delayMin, delayMax + ((Math.random() * 2 - 1) * jitter * 1.5));
+        if (Math.random() < (settings.humMicroPauseChance / 100)) {
+            const pause = Math.max(0, settings.humMicroPauseMs || 0) / 1000;
+            delayMin += pause * 0.5;
+            delayMax += pause;
+        }
+
+        let depthFinal = depthBase;
+        depthFinal += Math.round((settings.humDepthScale / 100) * 1.6);
+        depthFinal += Math.round(phaseBoost - phaseDrop);
+        depthFinal += Math.round(complexityFactor * (settings.humComplexityDepthBoost || 0));
+        if (panic) depthFinal -= Math.max(0, settings.humClockPanicDepthDrop || 0);
+        if (Math.random() < (settings.humDepthBlunderChance / 100)) depthFinal -= Math.max(0, settings.humDepthBlunderPenalty || 0);
+        if (Math.random() < (settings.humTiltChance / 100)) depthFinal -= Math.max(0, settings.humTiltDepthDrop || 0);
+        if (Math.random() < (settings.humBurstWindow / 100)) depthFinal -= Math.max(0, settings.humBurstDepthDrop || 0);
+        const depthJ = Math.max(0, settings.humDepthJitter || 0);
+        depthFinal += Math.round((Math.random() * 2 - 1) * depthJ);
+        const streakAdj = (settings.humStreakiness || 0) / 100;
+        depthFinal += Math.round((Math.random() < 0.5 ? -1 : 1) * streakAdj);
+
+        preview.depthFinal = clamp(depthFinal, 1, 40);
+        preview.delayMinFinal = parseFloat(delayMin.toFixed(2));
+        preview.delayMaxFinal = parseFloat(delayMax.toFixed(2));
+        return preview;
+    }
     function analyze(depth = settings.depth, fenOverride = null, isRetry = !1) {
         if (state.isThinking && !fenOverride && !isRetry) return;
         let finalFEN = fenOverride || sanitizeFEN(getRawBoardFEN());
@@ -1069,7 +1182,9 @@ self.fetch = function(url, opts) {
         if (!fenOverride) state.lastSanitizedBoardFEN = finalFEN;
         state.isThinking = !0;
         state.analysisStartTime = performance.now();
-        const minMs = settings.minDelay * 1000, maxMs = settings.maxDelay * 1000;
+        const h = getHumanizationPreview(finalFEN, depth);
+        depth = h.depthFinal;
+        const minMs = h.delayMinFinal * 1000, maxMs = h.delayMaxFinal * 1000;
         const delay = Math.random() * (maxMs - minMs) + minMs;
         state.moveTargetTime = performance.now() + delay;
         state.calculatedDelay = (delay / 1000).toFixed(2);
@@ -1497,7 +1612,6 @@ self.fetch = function(url, opts) {
         if (document.getElementById("modalOv")) document.getElementById("modalOv").remove();
         if (document.getElementById("histModalOv")) document.getElementById("histModalOv").remove();
         if (document.getElementById("localModalOv")) document.getElementById("localModalOv").remove();
-        if (document.getElementById("fenTooltip")) document.getElementById("fenTooltip").remove();
         loadSettings();
         const initHsl = rgbToHsl(...Object.values(hexToRgb(settings.highlightColor)));
         state.h = initHsl.h; state.s = initHsl.s; state.l = initHsl.l;
@@ -1857,37 +1971,6 @@ self.fetch = function(url, opts) {
             ${SM} .rgb-inputs, ${S} .rgb-inputs { display: flex; gap: 5px; flex: 1; justify-content: flex-end; }
             ${SM} .rgb-inputs input, ${S} .rgb-inputs input { width: 46px; text-align: center; }
 
-            /* ── History table ── */
-            #histTableContainer { flex: 1; overflow-y: auto; border: 1px solid #444; border-radius: 4px; margin-top: 10px; }
-            #histTable { width: 100%; border-collapse: collapse; font-size: 0.83em; }
-            #histTable th { background: var(--bot-b); color: var(--bot-p); position: sticky; top: 0; z-index: 1; padding: 8px 6px; font-size: 0.8em; letter-spacing: 0.05em; text-transform: uppercase; }
-            #histTable td { border-bottom: 1px solid rgba(255,255,255,0.05); padding: 7px 6px; text-align: left; color: var(--bot-t); }
-            #histTable tr:hover td { background: rgba(255,255,255,0.04); }
-            .hist-win  { color: #81b64c; font-weight: 700; }
-            .hist-loss { color: #ff5555; font-weight: 700; }
-            .hist-draw { color: #888; font-weight: 700; }
-            .hist-fen  { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; color: #666; text-decoration: underline dotted; }
-            .btn-del   { background: #c0392b !important; color: white !important; padding: 2px 8px; border-radius: 3px; font-size: 0.72em; cursor: pointer; border: none; height: auto; }
-            .hist-controls { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
-            #histEmpty { padding: 24px; text-align: center; color: #555; font-style: italic; }
-
-            /* ── FEN tooltip ── */
-            #fenTooltip {
-                position: fixed;
-                border: 2px solid #444;
-                background: #1a1a1a;
-                z-index: 10001;
-                display: none;
-                pointer-events: none;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.6);
-                border-radius: 5px;
-                overflow: hidden;
-            }
-            .fen-board { display: grid; grid-template-columns: repeat(8, 1fr); width: 240px; height: 240px; }
-            .fen-sq { width: 30px; height: 30px; display: flex; justify-content: center; align-items: center; background-size: 100%; background-repeat: no-repeat; }
-            .fen-sq.light { background-color: #eeeed2; }
-            .fen-sq.dark  { background-color: #769656; }
-
             /* ── Modal header ── */
             .modal-header {
                 display: flex;
@@ -2050,6 +2133,7 @@ self.fetch = function(url, opts) {
                             <label>Depth <span style="color:#666;">(max <span id="lblMaxDepth">18</span>)</span></label>
                             <input type="number" id="inpDepth" min="1" max="18" value="${settings.depth}">
                         </div>
+                        <div id="depthHumanizedDisplay" style="font-size:0.7em; color:#666; text-align:right; margin-top:-7px;">Effective depth: ${settings.depth}</div>
                         <div class="row show-cloud">
                             <label>Max Time (ms)</label>
                             <input type="number" id="inpTime" value="${settings.maxThinkingTime}">
@@ -2110,12 +2194,13 @@ self.fetch = function(url, opts) {
                             </div>
                         </div>
                         <div id="delayDisplay">Next: N/A</div>
+                        <div id="delayHumanizedDisplay" style="font-size:0.7em; color:#666; text-align:right; margin-top:-2px;">Effective range: ${settings.minDelay}s - ${settings.maxDelay}s</div>
                     </div>
 
                     <div class="btn-row">
                         <button id="btnAnalyze">▶ Analyze</button>
                         <button id="custBtn">🎨 Visuals &amp; Theme</button>
-                        <button id="histBtn">📋 Game History</button>
+                        <button id="histBtn">🧠 Humanization</button>
                         <button id="localBtn">⚙ Local Engine Settings</button>
                     </div>
 
@@ -2254,22 +2339,58 @@ self.fetch = function(url, opts) {
             <div id="histModalOv">
                 <div id="histModal">
                     <div class="modal-header">
-                        <h3 style="color:#9b59b6;">Game History (Broken: Leaving next update. Request removal prevention through feedback page)</h3>
+                        <h3 style="color:#9b59b6;">Humanization Lab</h3>
                         <button id="histModalClose">×</button>
                     </div>
-                    <div id="histTableContainer" style="padding:0 14px;">
-                        <table id="histTable">
-                            <thead>
-                                <tr><th>Date</th><th>Color</th><th>Result</th><th>Clock</th><th>FEN</th><th></th></tr>
-                            </thead>
-                            <tbody id="histBody"></tbody>
-                        </table>
-                    </div>
-                    <div class="hist-controls" style="padding:12px 14px;">
-                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
-                            <input type="checkbox" id="chkHistory" ${settings.enableHistory ? "checked" : ""}> Recording Enabled
-                        </label>
-                        <button id="btnClearHist" style="background:#c0392b !important; color:white !important; font-size:0.8em; padding:0 10px; height:26px;">Delete All</button>
+                    <div class="modal-content" style="display:flex; flex-direction:column; gap:10px;">
+                        <div class="sect">
+                            <div class="row">
+                                <label>Enable Humanization</label>
+                                <input type="checkbox" id="chkHumanEnabled" ${settings.humanizationEnabled ? "checked" : ""}>
+                            </div>
+                            <div style="font-size:0.74em; color:#888;">Off by default. Turn on only when you want depth and delay to be automatically humanized.</div>
+                        </div>
+                        <div class="sect">
+                            <div class="row">
+                                <label>Profile</label>
+                                <select id="humProfile">
+                                    <option value="balanced"${settings.humProfile==="balanced"?" selected":""}>Balanced</option>
+                                    <option value="cautious"${settings.humProfile==="cautious"?" selected":""}>Cautious</option>
+                                    <option value="chaotic"${settings.humProfile==="chaotic"?" selected":""}>Chaotic</option>
+                                    <option value="blitz"${settings.humProfile==="blitz"?" selected":""}>Blitz</option>
+                                </select>
+                            </div>
+                            <div class="row"><label>Timing Scale</label><input type="range" id="humTimingScale" min="0" max="100" value="${settings.humTimingScale}"></div>
+                            <div class="row"><label>Timing Jitter</label><input type="range" id="humTimingJitter" min="0" max="100" value="${settings.humTimingJitter}"></div>
+                            <div class="row"><label>Spike Chance %</label><input type="number" id="humTimingSpikeChance" min="0" max="100" value="${settings.humTimingSpikeChance}" style="width:70px;"></div>
+                            <div class="row"><label>Spike Bonus (s)</label><input type="number" id="humTimingSpikeBonus" min="0" max="10" step="0.1" value="${settings.humTimingSpikeBonus}" style="width:70px;"></div>
+                            <div class="row"><label>Micro-pause %</label><input type="number" id="humMicroPauseChance" min="0" max="100" value="${settings.humMicroPauseChance}" style="width:70px;"></div>
+                            <div class="row"><label>Micro-pause (ms)</label><input type="number" id="humMicroPauseMs" min="0" max="3000" value="${settings.humMicroPauseMs}" style="width:70px;"></div>
+                        </div>
+                        <div class="sect">
+                            <div class="row"><label>Depth Bias</label><input type="range" id="humDepthScale" min="0" max="100" value="${settings.humDepthScale}"></div>
+                            <div class="row"><label>Depth Jitter</label><input type="number" id="humDepthJitter" min="0" max="8" value="${settings.humDepthJitter}" style="width:70px;"></div>
+                            <div class="row"><label>Blunder Chance %</label><input type="number" id="humDepthBlunderChance" min="0" max="100" value="${settings.humDepthBlunderChance}" style="width:70px;"></div>
+                            <div class="row"><label>Blunder Penalty</label><input type="number" id="humDepthBlunderPenalty" min="0" max="10" value="${settings.humDepthBlunderPenalty}" style="width:70px;"></div>
+                            <div class="row"><label>Opening Boost</label><input type="number" id="humOpeningBoost" min="0" max="10" value="${settings.humOpeningBoost}" style="width:70px;"></div>
+                            <div class="row"><label>Endgame Drop</label><input type="number" id="humEndgameDrop" min="0" max="10" value="${settings.humEndgameDrop}" style="width:70px;"></div>
+                            <div class="row"><label>Complexity Weight</label><input type="range" id="humComplexityWeight" min="0" max="100" value="${settings.humComplexityWeight}"></div>
+                            <div class="row"><label>Complexity Depth+</label><input type="number" id="humComplexityDepthBoost" min="0" max="8" value="${settings.humComplexityDepthBoost}" style="width:70px;"></div>
+                            <div class="row"><label>Complexity Delay+</label><input type="number" id="humComplexityDelayBoost" min="0" max="5" step="0.1" value="${settings.humComplexityDelayBoost}" style="width:70px;"></div>
+                        </div>
+                        <div class="sect">
+                            <div class="row"><label>Panic Clock (s)</label><input type="number" id="humClockPanic" min="1" max="120" value="${settings.humClockPanic}" style="width:70px;"></div>
+                            <div class="row"><label>Panic Depth Drop</label><input type="number" id="humClockPanicDepthDrop" min="0" max="8" value="${settings.humClockPanicDepthDrop}" style="width:70px;"></div>
+                            <div class="row"><label>Stable Clock (s)</label><input type="number" id="humClockStabilize" min="1" max="600" value="${settings.humClockStabilize}" style="width:70px;"></div>
+                            <div class="row"><label>Stable Delay Drop</label><input type="number" id="humClockStabilizeDelayDrop" min="0" max="5" step="0.1" value="${settings.humClockStabilizeDelayDrop}" style="width:70px;"></div>
+                            <div class="row"><label>Streakiness</label><input type="range" id="humStreakiness" min="0" max="100" value="${settings.humStreakiness}"></div>
+                            <div class="row"><label>Tilt Chance %</label><input type="number" id="humTiltChance" min="0" max="100" value="${settings.humTiltChance}" style="width:70px;"></div>
+                            <div class="row"><label>Tilt Depth Drop</label><input type="number" id="humTiltDepthDrop" min="0" max="8" value="${settings.humTiltDepthDrop}" style="width:70px;"></div>
+                            <div class="row"><label>Burst Window %</label><input type="number" id="humBurstWindow" min="0" max="100" value="${settings.humBurstWindow}" style="width:70px;"></div>
+                            <div class="row"><label>Burst Depth Drop</label><input type="number" id="humBurstDepthDrop" min="0" max="5" value="${settings.humBurstDepthDrop}" style="width:70px;"></div>
+                            <div class="row"><label>Burst Delay Drop</label><input type="number" id="humBurstDelayDrop" min="0" max="5" step="0.1" value="${settings.humBurstDelayDrop}" style="width:70px;"></div>
+                        </div>
+                        <div id="humPreview" style="font-family:monospace; font-size:0.74em; color:#95a5a6; border:1px solid var(--bot-b); border-radius:4px; padding:8px;">Preview: Humanization disabled.</div>
                     </div>
                 </div>
             </div>
@@ -2385,8 +2506,6 @@ self.fetch = function(url, opts) {
                     </div>
                 </div>
             </div>
-
-            <div id="fenTooltip"></div>
         `;
         document.body.insertAdjacentHTML("beforeend", fullHTML);
         const panel = document.getElementById("enginePanel");
@@ -2424,6 +2543,8 @@ self.fetch = function(url, opts) {
             pvGradSettings: document.getElementById("pvGradSettings"),
             inpMin: document.getElementById("inpMin"),
             inpMax: document.getElementById("inpMax"),
+            depthHumanizedDisplay: document.getElementById("depthHumanizedDisplay"),
+            delayHumanizedDisplay: document.getElementById("delayHumanizedDisplay"),
             chkDebug: document.getElementById("chkDebug"),
             debugArea: document.getElementById("debugArea"),
             btnReset: document.getElementById("btnReset"),
@@ -2435,9 +2556,9 @@ self.fetch = function(url, opts) {
             modalClose: document.getElementById("modalClose"),
             histModal: document.getElementById("histModalOv"),
             histModalClose: document.getElementById("histModalClose"),
-            histBody: document.getElementById("histBody"),
-            btnClearHist: document.getElementById("btnClearHist"),
-            chkHistory: document.getElementById("chkHistory"),
+            chkHumanEnabled: document.getElementById("chkHumanEnabled"),
+            humProfile: document.getElementById("humProfile"),
+            humPreview: document.getElementById("humPreview"),
             localModal: document.getElementById("localModalOv"),
             localModalClose: document.getElementById("localModalClose"),
             visType: document.getElementById("visType"),
@@ -2455,7 +2576,6 @@ self.fetch = function(url, opts) {
             inpG: document.getElementById("inpG"),
             inpB: document.getElementById("inpB"),
             inpHex: document.getElementById("inpHex"),
-            fenTooltip: document.getElementById("fenTooltip"),
             tabMove: document.getElementById("tabMove"),
             tabTheme: document.getElementById("tabTheme"),
             tabContentMove: document.getElementById("tabContentMove"),
@@ -2506,9 +2626,8 @@ self.fetch = function(url, opts) {
         state.ui.btnReset.onclick = resetSettings;
         state.ui.custBtn.onclick = () => (state.ui.modal.style.display = "flex");
         state.ui.modalClose.onclick = () => (state.ui.modal.style.display = "none");
-        state.ui.histBtn.onclick = () => { renderHistory(); state.ui.histModal.style.display = "flex"; };
+        state.ui.histBtn.onclick = () => { updateHumanizationPreviewUI(); state.ui.histModal.style.display = "flex"; };
         state.ui.histModalClose.onclick = () => (state.ui.histModal.style.display = "none");
-        state.ui.btnClearHist.onclick = () => { if (confirm("Delete all history?")) { state.history = []; GM_setValue("bot_history", []); renderHistory(); } };
         state.ui.localBtn.onclick = () => { loadModelSettings(settings.localModelId); syncLocalSettingsInputs(); updateLocalSettingsUI(); state.ui.localModal.style.display = "flex"; };
         state.ui.localModalClose.onclick = () => (state.ui.localModal.style.display = "none");
 
@@ -2858,99 +2977,33 @@ self.fetch = function(url, opts) {
                 syncColor();
             }
         };
-    }
-    function drawFenBoard(fen) {
-        let rows = fen.split(" ")[0].split("/"), board = [];
-        for (let r of rows) {
-            let rowArr = [];
-            for (let char of r) {
-                if (!isNaN(char)) { for (let k = 0; k < parseInt(char); k++) rowArr.push(""); }
-                else rowArr.push(char);
-            }
-            board.push(rowArr);
-        }
-        let html = '<div class="fen-board">';
-        for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
-            const piece = board[r][c], isDark = (r+c)%2===1;
-            const bg = piece ? `style="background-image: url('${PIECE_IMGS[piece]}');"` : "";
-            html += `<div class="fen-sq ${isDark ? "dark" : "light"}" ${bg}></div>`;
-        }
-        return html + "</div>";
-    }
-    function renderHistory() {
-        if (!state.ui.histBody) return;
-        state.ui.histBody.innerHTML = "";
-        if (state.history.length === 0) { state.ui.histBody.innerHTML = '<tr><td colspan="5" id="histEmpty">No history yet.</td></tr>'; return; }
-        [...state.history].reverse().forEach((item, index) => {
-            const tr = document.createElement("tr");
-            let resClass = item.result === "Win" ? "hist-win" : item.result === "Loss" ? "hist-loss" : "hist-draw";
-            tr.innerHTML = `
-                <td>${item.date}</td>
-                <td style="font-weight:bold; color:${item.color === "White" ? "#ffffff" : "#888888"};">${item.color || "N/A"}</td>
-                <td class="${resClass}">${item.result}</td>
-                <td>${item.myTime} / ${item.oppTime}</td>
-                <td class="hist-fen" data-fen="${item.fen}">${item.fen}</td>
-                <td><button class="btn-del" data-idx="${state.history.length - 1 - index}">✕</button></td>`;
-            state.ui.histBody.appendChild(tr);
+        const updateHumanizationPreviewUI = () => {
+            const p = getHumanizationPreview(state.lastSanitizedBoardFEN || sanitizeFEN(getRawBoardFEN()), settings.depth);
+            if (state.ui.depthHumanizedDisplay) state.ui.depthHumanizedDisplay.innerText = p.enabled ? `Effective depth: ${p.depthFinal} (base ${p.depthBase})` : `Effective depth: ${p.depthBase}`;
+            if (state.ui.delayHumanizedDisplay) state.ui.delayHumanizedDisplay.innerText = p.enabled ? `Effective range: ${p.delayMinFinal}s - ${p.delayMaxFinal}s` : `Effective range: ${p.delayMinBase}s - ${p.delayMaxBase}s`;
+            if (state.ui.humPreview) state.ui.humPreview.innerText = p.enabled
+                ? `Live Profile=${settings.humProfile} | Depth ${p.depthBase}→${p.depthFinal} | Delay ${p.delayMinBase}s-${p.delayMaxBase}s → ${p.delayMinFinal}s-${p.delayMaxFinal}s`
+                : "Preview: Humanization disabled.";
+        };
+        [
+            "chkHumanEnabled","humProfile","humTimingScale","humTimingJitter","humTimingSpikeChance","humTimingSpikeBonus","humMicroPauseChance","humMicroPauseMs",
+            "humDepthScale","humDepthJitter","humDepthBlunderChance","humDepthBlunderPenalty","humOpeningBoost","humEndgameDrop","humComplexityWeight","humComplexityDepthBoost","humComplexityDelayBoost",
+            "humClockPanic","humClockPanicDepthDrop","humClockStabilize","humClockStabilizeDelayDrop","humStreakiness","humTiltChance","humTiltDepthDrop","humBurstWindow","humBurstDepthDrop","humBurstDelayDrop"
+        ].forEach((id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const key = id === "chkHumanEnabled" ? "humanizationEnabled" : id;
+            el.addEventListener(el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input", (e) => {
+                const val = el.type === "checkbox" ? e.target.checked : el.type === "number" || el.type === "range" ? parseFloat(e.target.value) : e.target.value;
+                saveSetting(key, val);
+                updateHumanizationPreviewUI();
+            });
         });
-        document.querySelectorAll(".btn-del").forEach((btn) => {
-            btn.onclick = (e) => { const idx = parseInt(e.target.dataset.idx); state.history.splice(idx, 1); GM_setValue("bot_history", state.history); renderHistory(); };
-        });
-        document.querySelectorAll(".hist-fen").forEach((el) => {
-            el.onmouseenter = (e) => {
-                const fen = e.target.getAttribute("data-fen");
-                if (fen && state.ui.fenTooltip) {
-                    state.ui.fenTooltip.innerHTML = drawFenBoard(fen);
-                    state.ui.fenTooltip.style.display = "block";
-                    const rect = e.target.getBoundingClientRect();
-                    let left = rect.left + 20, top = rect.bottom + 5;
-                    if (left + 250 > window.innerWidth) left = window.innerWidth - 260;
-                    if (top + 250 > window.innerHeight) top = rect.top - 260;
-                    state.ui.fenTooltip.style.left = left + "px"; state.ui.fenTooltip.style.top = top + "px";
-                }
-            };
-            el.onmouseleave = () => { if (state.ui.fenTooltip) state.ui.fenTooltip.style.display = "none"; };
-        });
-    }
-    function checkForGameOver() {
-        if (!settings.enableHistory) return;
-        const resultEl = document.querySelector(".game-result-component, .game-over-modal-content, .daily-game-footer-game-over");
-        if (resultEl) {
-            if (state.hasSavedCurrentGameResult) return;
-            let fen = sanitizeFEN(getRawBoardFEN());
-            let playingAsCode = state.playingAs;
-            if (!playingAsCode && state.board?.game?.getPlayingAs) { try { playingAsCode = state.board.game.getPlayingAs(); } catch (e) {} }
-            if (playingAsCode !== 1 && playingAsCode !== 2) playingAsCode = 0;
-            const playerColor = playingAsCode === 2 ? "Black" : "White";
-            if (playingAsCode === 2) {
-                let parts = fen.split(" ");
-                if (parts.length > 0) { parts[0] = parts[0].split("/").reverse().map((row) => row.split("").reverse().join("")).join("/"); fen = parts.join(" "); }
-            }
-            const clockBot = document.querySelector(".clock-bottom .clock-time-monospace, .clock-bottom");
-            const clockTop = document.querySelector(".clock-top .clock-time-monospace, .clock-top");
-            let myTime = clockBot ? clockBot.innerText : "N/A";
-            let oppTime = clockTop ? clockTop.innerText : "N/A";
-            let simpleRes = "Draw";
-            const mainMsg = resultEl.querySelector(".game-result-main-message, .game-over-header-title");
-            const subMsgEl = resultEl.querySelector(".game-result-sub-message, .game-over-header-subtitle");
-            const fullText = ((mainMsg ? mainMsg.innerText : resultEl.innerText.split("\n")[0]) + " " + (subMsgEl ? subMsgEl.innerText : "")).toLowerCase();
-            if (resultEl.classList.contains("game-result-win")) simpleRes = "Win";
-            else if (resultEl.classList.contains("game-result-loss")) simpleRes = "Loss";
-            else if (resultEl.classList.contains("game-result-draw")) simpleRes = "Draw";
-            else if (fullText.includes("you won")) simpleRes = "Win";
-            else if (fullText.includes("you lost")) simpleRes = "Loss";
-            else if (playingAsCode === 1 && fullText.includes("white won")) simpleRes = "Win";
-            else if (playingAsCode === 1 && fullText.includes("black won")) simpleRes = "Loss";
-            else if (playingAsCode === 2 && fullText.includes("black won")) simpleRes = "Win";
-            else if (playingAsCode === 2 && fullText.includes("white won")) simpleRes = "Loss";
-            state.history.push({ date: new Date().toLocaleString(), color: playerColor, result: simpleRes, fen, myTime, oppTime, id: Date.now() });
-            if (state.history.length > 200) state.history.shift();
-            GM_setValue("bot_history", state.history);
-            state.hasSavedCurrentGameResult = !0;
-            if (state.ui.histModal && state.ui.histModal.style.display !== "none") renderHistory();
-        } else {
-            state.hasSavedCurrentGameResult = !1;
-        }
+        state.ui.inpMin.addEventListener("input", updateHumanizationPreviewUI);
+        state.ui.inpMax.addEventListener("input", updateHumanizationPreviewUI);
+        state.ui.inpDepth.addEventListener("input", updateHumanizationPreviewUI);
+        state.updateHumanizationPreviewUI = updateHumanizationPreviewUI;
+        updateHumanizationPreviewUI();
     }
     function enforceBounds() {
         if (state.ui.panel) {
@@ -2983,6 +3036,7 @@ self.fetch = function(url, opts) {
         if (state.ui.logSent) state.ui.logSent.innerText = state.lastPayload;
         if (state.ui.logRec) state.ui.logRec.innerText = state.lastResponse;
         if (document.activeElement !== state.ui.inpDepth) state.ui.inpDepth.value = settings.depth;
+        if (settings.humPreviewLive !== false && typeof state.updateHumanizationPreviewUI === "function") state.updateHumanizationPreviewUI();
     }
     function mainLoop() {
         state.board = document.querySelector(CONFIG.BOARD_SEL);
@@ -3012,7 +3066,6 @@ self.fetch = function(url, opts) {
                 if (isTurn && clean !== state.lastSanitizedBoardFEN) analyze(settings.depth);
             }
         }
-        checkForGameOver();
         updateUI();
     }
     // --- GLOBAL KEYBIND LISTENER ---
