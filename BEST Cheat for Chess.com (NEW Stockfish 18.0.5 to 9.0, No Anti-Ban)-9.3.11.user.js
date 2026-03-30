@@ -1956,7 +1956,7 @@ self.fetch = function(url, opts) {
                 box-shadow: 0 8px 32px rgba(0,0,0,0.5);
             }
             ${SH} { width: 600px; height: 600px; }
-            ${SM} *, ${SL} * { color: var(--bot-t); }
+            ${SM} *, ${SH} *, ${SL} * { color: var(--bot-t); }
             ${SM} label, ${SH} label, ${SL} label { opacity: 1 !important; font-weight: 600; font-size: 0.88em; }
             ${SM} input[type="color"], ${SH} input[type="color"] { height: 26px; padding: 0; width: 40px; cursor: pointer; border: none; }
             ${SM} select, ${SH} select, ${SL} select { height: 26px; padding: 0 6px; font-size: 0.88em; }
@@ -2013,11 +2013,32 @@ self.fetch = function(url, opts) {
 
             /* ── Modal content ── */
             .modal-content { padding: 14px 16px; overflow-y: auto; flex: 1; }
-            ${SM} .modal-content .row { display: flex; align-items: center; margin-bottom: 11px; }
-            ${SM} .modal-content .row label { flex: 0 0 128px; text-align: left; font-weight: 600; }
+            ${SM} .modal-content .row, ${SH} .modal-content .row { display: flex; align-items: center; margin-bottom: 11px; }
+            ${SM} .modal-content .row label, ${SH} .modal-content .row label { flex: 0 0 128px; text-align: left; font-weight: 600; }
             ${SM} .modal-content .row > input[type="text"],
             ${SM} .modal-content .row > input[type="color"],
-            ${SM} .modal-content .row > select { flex: 1; }
+            ${SM} .modal-content .row > select,
+            ${SH} .modal-content .row > input[type="text"],
+            ${SH} .modal-content .row > input[type="color"],
+            ${SH} .modal-content .row > select { flex: 1; }
+
+            /* ── Humanization modal specifics ── */
+            #histModal .sect-note {
+                font-size: 0.74em;
+                color: #888;
+                opacity: 0.95;
+            }
+            #histModal .hum-preview {
+                font-family: 'Cascadia Code', 'Fira Mono', monospace;
+                font-size: 0.74em;
+                color: var(--bot-t);
+                opacity: 0.75;
+                border: 1px solid var(--bot-b);
+                border-radius: 4px;
+                padding: 8px;
+                background: rgba(0,0,0,0.18);
+                line-height: 1.5;
+            }
 
             /* ── Slider groups ── */
             ${S} .slider-group, ${SM} .slider-group {
@@ -2339,7 +2360,7 @@ self.fetch = function(url, opts) {
             <div id="histModalOv">
                 <div id="histModal">
                     <div class="modal-header">
-                        <h3 style="color:#9b59b6;">Humanization Lab</h3>
+                        <h3 style="color:var(--bot-p);">Humanization Lab</h3>
                         <button id="histModalClose">×</button>
                     </div>
                     <div class="modal-content" style="display:flex; flex-direction:column; gap:10px;">
@@ -2348,7 +2369,7 @@ self.fetch = function(url, opts) {
                                 <label>Enable Humanization</label>
                                 <input type="checkbox" id="chkHumanEnabled" ${settings.humanizationEnabled ? "checked" : ""}>
                             </div>
-                            <div style="font-size:0.74em; color:#888;">Off by default. Turn on only when you want depth and delay to be automatically humanized.</div>
+                            <div class="sect-note">Off by default. Turn on only when you want depth and delay to be automatically humanized.</div>
                         </div>
                         <div class="sect">
                             <div class="row">
@@ -2390,7 +2411,7 @@ self.fetch = function(url, opts) {
                             <div class="row"><label>Burst Depth Drop</label><input type="number" id="humBurstDepthDrop" min="0" max="5" value="${settings.humBurstDepthDrop}" style="width:70px;"></div>
                             <div class="row"><label>Burst Delay Drop</label><input type="number" id="humBurstDelayDrop" min="0" max="5" step="0.1" value="${settings.humBurstDelayDrop}" style="width:70px;"></div>
                         </div>
-                        <div id="humPreview" style="font-family:monospace; font-size:0.74em; color:#95a5a6; border:1px solid var(--bot-b); border-radius:4px; padding:8px;">Preview: Humanization disabled.</div>
+                        <div id="humPreview" class="hum-preview">Preview: Humanization disabled.</div>
                     </div>
                 </div>
             </div>
