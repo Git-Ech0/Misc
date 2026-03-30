@@ -213,6 +213,7 @@
         localDepth: null,
         hasSavedCurrentGameResult: !1,
         lastSeenFEN: "",
+        lastBoardChangeWasCapture: false,
         playingAs: null,
         visualTab: "move",
         visuals: [],
@@ -261,6 +262,11 @@
         humComplexitySense: 60,
         humTimePressureSense: 70,
         humVariance: 30,
+        humFastRecaptures: true,
+        humPhaseTiming: true,
+        humOpeningSpeed: 20,
+        humMiddlegameSlow: 30,
+        humEndgameSpeed: 15,
         humTimingScale: 50,
         humTimingJitter: 25,
         humTimingSpikeChance: 8,
@@ -1098,6 +1104,43 @@ self.fetch = function(url, opts) {
         const board = fen.split(" ")[0] || "";
         return (board.match(/[prnbqkPRNBQK]/g) || []).length;
     }
+    function getPieceMapFromFen(fen) {
+        const map = {};
+        if (!fen) return map;
+        const board = (fen.split(" ")[0] || "").split("/");
+        const files = "abcdefgh";
+        for (let r = 0; r < 8; r++) {
+            let file = 0;
+            for (const ch of (board[r] || "")) {
+                if (/\d/.test(ch)) { file += parseInt(ch, 10); continue; }
+                if (file < 8) {
+                    const sq = `${files[file]}${8 - r}`;
+                    map[sq] = ch;
+                }
+                file++;
+            }
+        }
+        return map;
+    }
+    function didCaptureOccur(prevFen, nextFen) {
+        if (!prevFen || !nextFen) return false;
+        return countPiecesFromFen(nextFen) < countPiecesFromFen(prevFen);
+    }
+    function isCaptureMoveInFen(move, fen) {
+        if (!move || move.length < 4 || !fen) return false;
+        const to = move.slice(2, 4);
+        const map = getPieceMapFromFen(fen);
+        const piece = map[to];
+        if (!piece) return false;
+        const side = (fen.split(" ")[1] || "w");
+        return side === "w" ? /[prnbqk]/.test(piece) : /[PRNBQK]/.test(piece);
+    }
+    function getPhaseFromFen(fen) {
+        const pieces = countPiecesFromFen(fen);
+        if (pieces >= 24) return "opening";
+        if (pieces <= 12) return "endgame";
+        return "middlegame";
+    }
     function readPlayerClockSeconds() {
         const clockBot = document.querySelector(".clock-bottom .clock-time-monospace, .clock-bottom");
         if (!clockBot) return null;
@@ -1132,6 +1175,7 @@ self.fetch = function(url, opts) {
         if (!settings.humanizationEnabled) return preview;
         const profile = getHumanProfilePreset(settings.humProfile);
         const pieces = countPiecesFromFen(fen);
+        const phase = getPhaseFromFen(fen);
         const complexityLevel = clamp((32 - pieces) / 20, 0, 1);
         const complexitySense = clamp((settings.humComplexitySense || 0) / 100, 0, 1);
         const adaptiveTiming = clamp((settings.humAdaptiveTiming || 0) / 100, 0, 1);
@@ -1143,6 +1187,14 @@ self.fetch = function(url, opts) {
         const complexityBoost = complexityLevel * complexitySense;
         let delayMin = minBase * profile.delay;
         let delayMax = maxBase * profile.delay;
+        if (settings.humPhaseTiming) {
+            const openSpeed = clamp((settings.humOpeningSpeed || 0) / 100, 0, 0.8);
+            const midSlow = clamp((settings.humMiddlegameSlow || 0) / 100, 0, 1.5);
+            const endSpeed = clamp((settings.humEndgameSpeed || 0) / 100, 0, 0.8);
+            if (phase === "opening") { delayMin *= (1 - openSpeed); delayMax *= (1 - openSpeed); }
+            if (phase === "middlegame") { delayMin *= (1 + midSlow); delayMax *= (1 + midSlow); }
+            if (phase === "endgame") { delayMin *= (1 - endSpeed); delayMax *= (1 - endSpeed); }
+        }
         delayMin += adaptiveTiming * complexityBoost * 0.8;
         delayMax += adaptiveTiming * complexityBoost * 1.5;
         if (panic) {
@@ -1156,6 +1208,8 @@ self.fetch = function(url, opts) {
         const jitter = variance * 0.8;
         delayMin = Math.max(0, delayMin + ((Math.random() * 2 - 1) * jitter));
         delayMax = Math.max(delayMin, delayMax + ((Math.random() * 2 - 1) * jitter * 1.4));
+        delayMin = Math.max(delayMin, 0.18);
+        delayMax = Math.max(delayMax, delayMin + 0.12);
 
         const qualityPenalty = clamp((100 - preview.moveQuality) / 100, 0, 0.7);
         let depthFinal = depthBase * profile.depth;
@@ -1164,6 +1218,7 @@ self.fetch = function(url, opts) {
         if (panic) depthFinal -= Math.round(pressureSense * 2.5);
         depthFinal += Math.round((Math.random() * 2 - 1) * (variance * 1.8));
         preview.altMoveChance = clamp(parseFloat((qualityPenalty * profile.mistake * (0.55 + complexityLevel * 0.25)).toFixed(2)), 0, 0.8);
+        preview.phase = phase;
 
         preview.depthFinal = clamp(depthFinal, 1, 40);
         preview.delayMinFinal = parseFloat(delayMin.toFixed(2));
@@ -1405,6 +1460,12 @@ self.fetch = function(url, opts) {
         }
     }
     function processBestMove(bestMove, evalScore, mate, continuationArr, winChance, duration, depth = null, isFinal = false) {
+        if (settings.humanizationEnabled && settings.humFastRecaptures && state.lastBoardChangeWasCapture && isCaptureMoveInFen(bestMove, state.lastSanitizedBoardFEN)) {
+            const now = performance.now();
+            const quickDelayMs = 120 + Math.random() * 220;
+            state.moveTargetTime = Math.min(state.moveTargetTime || (now + quickDelayMs), now + quickDelayMs);
+            state.calculatedDelay = (Math.max(0.1, (state.moveTargetTime - now) / 1000)).toFixed(2);
+        }
         state.currentBestMove = bestMove;
         state.currentPV = continuationArr || (bestMove ? [bestMove] : []);
         if (isFinal || !state.isThinking) { Visuals.add(bestMove, 'history'); PV.clear(); }
@@ -2432,17 +2493,30 @@ self.fetch = function(url, opts) {
                                 </select>
                             </div>
                             <div class="row"><label>Move Quality</label><input type="range" id="humMoveQuality" min="30" max="100" value="${settings.humMoveQuality || 88}"></div>
+                            <div class="row"><label>Move Quality %</label><input type="number" id="humMoveQualityNum" min="30" max="100" value="${settings.humMoveQuality || 88}"></div>
                             <div class="sect-note">Higher = stronger moves. Lower = more human inaccuracies and occasional shallower-choice moves.</div>
                             <div class="row"><label>Adaptive Timing</label><input type="range" id="humAdaptiveTiming" min="0" max="100" value="${settings.humAdaptiveTiming || 65}"></div>
+                            <div class="row"><label>Adaptive Timing %</label><input type="number" id="humAdaptiveTimingNum" min="0" max="100" value="${settings.humAdaptiveTiming || 65}"></div>
                             <div class="sect-note">How much think time changes with position complexity.</div>
                         </div>
                         <div class="sect">
                             <div class="row"><label>Complexity Response</label><input type="range" id="humComplexitySense" min="0" max="100" value="${settings.humComplexitySense || 60}"></div>
+                            <div class="row"><label>Complexity %</label><input type="number" id="humComplexitySenseNum" min="0" max="100" value="${settings.humComplexitySense || 60}"></div>
                             <div class="sect-note">Higher = bigger depth/time changes in tactical positions.</div>
                             <div class="row"><label>Time Pressure Response</label><input type="range" id="humTimePressureSense" min="0" max="100" value="${settings.humTimePressureSense || 70}"></div>
+                            <div class="row"><label>Time Pressure %</label><input type="number" id="humTimePressureSenseNum" min="0" max="100" value="${settings.humTimePressureSense || 70}"></div>
                             <div class="sect-note">Higher = faster and shallower decisions when your clock is low.</div>
                             <div class="row"><label>Variance</label><input type="range" id="humVariance" min="0" max="100" value="${settings.humVariance || 30}"></div>
+                            <div class="row"><label>Variance %</label><input type="number" id="humVarianceNum" min="0" max="100" value="${settings.humVariance || 30}"></div>
                             <div class="sect-note">Adds natural inconsistency so moves and timing are less robotic.</div>
+                        </div>
+                        <div class="sect">
+                            <div class="row"><label>Use Phase Timing</label><input type="checkbox" id="humPhaseTiming" ${settings.humPhaseTiming ? "checked" : ""}></div>
+                            <div class="row"><label>Opening Faster %</label><input type="number" id="humOpeningSpeed" min="0" max="60" value="${settings.humOpeningSpeed || 20}"></div>
+                            <div class="row"><label>Middlegame Slower %</label><input type="number" id="humMiddlegameSlow" min="0" max="120" value="${settings.humMiddlegameSlow || 30}"></div>
+                            <div class="row"><label>Endgame Faster %</label><input type="number" id="humEndgameSpeed" min="0" max="60" value="${settings.humEndgameSpeed || 15}"></div>
+                            <div class="row"><label>Fast Recaptures</label><input type="checkbox" id="humFastRecaptures" ${settings.humFastRecaptures ? "checked" : ""}></div>
+                            <div class="sect-note">Fast recaptures only trigger after the board changed by a capture and your move is a capture.</div>
                         </div>
                         <div id="humPreview" class="hum-preview">Preview: Humanization disabled.</div>
                     </div>
@@ -2826,6 +2900,7 @@ self.fetch = function(url, opts) {
                 numEl.value = isPct ? Math.round(val * 100) : val;
                 if (key === "menuOpacity") applyTheme();
                 if (state.currentBestMove) { Visuals.removeByType('history'); Visuals.add(state.currentBestMove, 'history'); }
+                if (typeof state.updateHumanizationPreviewUI === "function" && key.startsWith("hum")) state.updateHumanizationPreviewUI();
             };
             numEl.oninput = () => {
                 let val = parseFloat(numEl.value);
@@ -2834,6 +2909,7 @@ self.fetch = function(url, opts) {
                 rangeEl.value = val;
                 if (key === "menuOpacity") applyTheme();
                 if (state.currentBestMove) { Visuals.removeByType('history'); Visuals.add(state.currentBestMove, 'history'); }
+                if (typeof state.updateHumanizationPreviewUI === "function" && key.startsWith("hum")) state.updateHumanizationPreviewUI();
             };
         };
         state.ui.selMenuPos.onchange = (e) => { saveSetting("menuPosition", e.target.value); applyMenuPosition(); };
@@ -2986,6 +3062,11 @@ self.fetch = function(url, opts) {
         bind(state.ui.visOutGlow, "visualOutlineGlow", "chk");
         bindSlider(state.ui.visOutGlowRad, state.ui.visOutGlowRadNum, "visualOutlineGlowRadius", false);
         bindSlider(state.ui.inpMenuOp, state.ui.inpMenuOpNum, "menuOpacity", true);
+        bindSlider(document.getElementById("humMoveQuality"), document.getElementById("humMoveQualityNum"), "humMoveQuality", false);
+        bindSlider(document.getElementById("humAdaptiveTiming"), document.getElementById("humAdaptiveTimingNum"), "humAdaptiveTiming", false);
+        bindSlider(document.getElementById("humComplexitySense"), document.getElementById("humComplexitySenseNum"), "humComplexitySense", false);
+        bindSlider(document.getElementById("humTimePressureSense"), document.getElementById("humTimePressureSenseNum"), "humTimePressureSense", false);
+        bindSlider(document.getElementById("humVariance"), document.getElementById("humVarianceNum"), "humVariance", false);
         bind(state.ui.colBg, "themeBg"); bind(state.ui.colTxt, "themeText");
         bind(state.ui.colBorder, "themeBorder"); bind(state.ui.colPrim, "themePrimary");
         [state.ui.sliderH, state.ui.sliderS, state.ui.sliderL].forEach(el => {
@@ -3036,11 +3117,11 @@ self.fetch = function(url, opts) {
             if (state.ui.depthHumanizedDisplay) state.ui.depthHumanizedDisplay.innerText = p.enabled ? `Effective depth: ${p.depthFinal} (base ${p.depthBase})` : `Effective depth: ${p.depthBase}`;
             if (state.ui.delayHumanizedDisplay) state.ui.delayHumanizedDisplay.innerText = p.enabled ? `Effective range: ${p.delayMinFinal}s - ${p.delayMaxFinal}s` : `Effective range: ${p.delayMinBase}s - ${p.delayMaxBase}s`;
             if (state.ui.humPreview) state.ui.humPreview.innerText = p.enabled
-                ? `Profile: ${settings.humProfile} | Move quality: ${p.moveQuality}% | Depth ${p.depthBase}→${p.depthFinal} | Delay ${p.delayMinBase}s-${p.delayMaxBase}s → ${p.delayMinFinal}s-${p.delayMaxFinal}s | Alt-move chance: ${Math.round((p.altMoveChance || 0) * 100)}%`
+                ? `Profile: ${settings.humProfile} | Phase: ${p.phase} | Move quality: ${p.moveQuality}% | Depth ${p.depthBase}→${p.depthFinal} | Delay ${p.delayMinBase}s-${p.delayMaxBase}s → ${p.delayMinFinal}s-${p.delayMaxFinal}s | Alt-move chance: ${Math.round((p.altMoveChance || 0) * 100)}% | Recapture ready: ${state.lastBoardChangeWasCapture ? "yes" : "no"}`
                 : "Preview: Humanization disabled.";
         };
         [
-            "chkHumanEnabled","humProfile","humMoveQuality","humAdaptiveTiming","humComplexitySense","humTimePressureSense","humVariance"
+            "chkHumanEnabled","humProfile","humFastRecaptures","humPhaseTiming","humOpeningSpeed","humMiddlegameSlow","humEndgameSpeed"
         ].forEach((id) => {
             const el = document.getElementById(id);
             if (!el) return;
@@ -3098,6 +3179,7 @@ self.fetch = function(url, opts) {
             const raw = getRawBoardFEN();
             if (raw) {
                 const clean = sanitizeFEN(raw);
+                state.lastBoardChangeWasCapture = !!(state.lastSeenFEN && clean !== state.lastSeenFEN && didCaptureOccur(state.lastSeenFEN, clean));
                 if (settings.hideAfterMove && state.lastSeenFEN && clean !== state.lastSeenFEN) {
                     Visuals.removeByType('history'); Visuals.removeByType('analysis'); PV.clear();
                 }
@@ -3114,6 +3196,7 @@ self.fetch = function(url, opts) {
             const raw = getRawBoardFEN();
             if (raw) {
                 const clean = sanitizeFEN(raw);
+                state.lastBoardChangeWasCapture = !!(state.lastSeenFEN && clean !== state.lastSeenFEN && didCaptureOccur(state.lastSeenFEN, clean));
                 const isTurn = state.board.game.getTurn() === state.board.game.getPlayingAs();
                 if (isTurn && clean !== state.lastSanitizedBoardFEN) analyze(settings.depth);
             }
