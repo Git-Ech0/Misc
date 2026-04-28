@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kilwins Simphony Analytics</title>
+    <link rel="stylesheet" href="dashboard.css" />
+  </head>
+  <body>
+    <header class="dash-header">
+      <div class="dash-header-inner">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">K</div>
+          <div class="brand-text">
+            <div class="brand-title">Kilwins Simphony Analytics</div>
+            <div class="brand-sub" id="meta-line">Drop a Simphony report .xlsx export to begin.</div>
+          </div>
+        </div>
+        <div class="dash-actions">
+          <button id="pick-file" class="btn btn-primary" type="button">Open .xlsx file…</button>
+          <button id="export-json" class="btn btn-ghost" type="button" disabled>Export JSON</button>
+          <button id="export-csv" class="btn btn-ghost" type="button" disabled>Export CSV</button>
+          <button id="clear" class="btn btn-ghost" type="button" disabled>Clear</button>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section id="dropzone" class="dropzone">
+        <div class="dropzone-inner">
+          <div class="dropzone-icon" aria-hidden="true">↧</div>
+          <h2>Drop a Simphony report here</h2>
+          <p>
+            Export any report from the Oracle Simphony portal as an
+            <strong>.xlsx</strong> file and drag it onto this page —
+            or click the button below to pick a file.
+          </p>
+          <p class="dropzone-hint">
+            All parsing happens in your browser. Nothing is uploaded.
+          </p>
+          <button id="pick-file-2" class="btn btn-primary" type="button">Choose .xlsx file…</button>
+          <input id="file-input" type="file" accept=".xlsx,.xlsm,.xls,.csv" hidden />
+        </div>
+      </section>
+
+      <section id="status" class="status hidden" role="status" aria-live="polite"></section>
+      <section id="report-list"></section>
+    </main>
+
+    <footer class="dash-footer">
+      <div>
+        100% local · Powered by
+        <a href="https://sheetjs.com/" target="_blank" rel="noopener noreferrer">SheetJS</a>
+        (Apache-2.0).
+      </div>
+    </footer>
+
+    <script src="../../vendor/xlsx.full.min.js"></script>
+    <script src="../lib/dataset.js"></script>
+    <script src="../lib/sheet-parser.js"></script>
+    <script src="../lib/analyzer.js"></script>
+    <script src="dashboard.js"></script>
+  </body>
+</html>
