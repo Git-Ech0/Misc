@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Live Network Tracker",
+  "version": "1.0.0",
+  "description": "Click the toolbar icon on any page to open a live network tracker tab that captures every request, response, header, body, cookie, WebSocket frame, EventSource message, timing and security datapoint sent between the client and the server for that page.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "activeTab",
+    "scripting",
+    "storage",
+    "downloads"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open Live Network Tracker for this tab",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": []
+}

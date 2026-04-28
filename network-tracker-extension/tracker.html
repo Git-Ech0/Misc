@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Live Network Tracker</title>
+    <link rel="stylesheet" href="tracker.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="toolbar-left">
+        <span class="status-dot" id="status-dot" data-status="idle"></span>
+        <span id="status-text">Initializing…</span>
+      </div>
+      <div class="toolbar-target">
+        <span class="label">Target:</span>
+        <a id="target-link" target="_blank" rel="noreferrer noopener"></a>
+      </div>
+      <div class="toolbar-right">
+        <input id="filter" type="search" placeholder="Filter (URL, method, status, type, text)" />
+        <label class="checkbox"><input type="checkbox" id="autoscroll" checked /> Auto-scroll</label>
+        <label class="checkbox"><input type="checkbox" id="preserve" checked /> Preserve on nav</label>
+        <button id="pause" type="button">Pause</button>
+        <button id="clear" type="button">Clear</button>
+        <button id="export-json" type="button">Export JSON</button>
+        <button id="export-har" type="button">Export HAR</button>
+      </div>
+    </header>
+
+    <section class="counters" id="counters">
+      <span><strong id="count-total">0</strong> events</span>
+      <span><strong id="count-requests">0</strong> requests</span>
+      <span><strong id="count-finished">0</strong> finished</span>
+      <span><strong id="count-failed">0</strong> failed</span>
+      <span><strong id="count-ws">0</strong> WS frames</span>
+      <span><strong id="count-bytes">0</strong> bytes received</span>
+    </section>
+
+    <main class="split">
+      <div class="table-pane">
+        <table id="rows">
+          <thead>
+            <tr>
+              <th class="col-num">#</th>
+              <th class="col-time">Time</th>
+              <th class="col-method">Method</th>
+              <th class="col-status">Status</th>
+              <th class="col-type">Type</th>
+              <th class="col-size">Size</th>
+              <th class="col-dur">Duration</th>
+              <th class="col-url">URL</th>
+            </tr>
+          </thead>
+          <tbody id="rows-body"></tbody>
+        </table>
+      </div>
+      <div class="details-pane" id="details">
+        <div class="details-empty">Select a row to inspect every captured datapoint.</div>
+      </div>
+    </main>
+
+    <script src="tracker.js" type="module"></script>
+  </body>
+</html>
