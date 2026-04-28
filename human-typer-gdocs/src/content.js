@@ -24,6 +24,55 @@
     total: 0,
   };
 
+  // ---------- Persistence ----------
+  // Saves the textarea content, selected preset name, and current slider
+  // values to chrome.storage.local so they survive page reloads and new
+  // doc instances.
+  const STORAGE_KEY = "humanTyperState";
+  let suppressSave = false;
+  let saveTimer = null;
+
+  function persistNow() {
+    if (suppressSave) return;
+    if (!chrome?.storage?.local) return;
+    const payload = {
+      text: textArea.value,
+      presetName: state.presetName,
+      config: {
+        wpm: state.config.wpm,
+        jitter: state.config.jitter,
+        typoRate: state.config.typoRate,
+        thinkingPauseChance: state.config.thinkingPauseChance,
+        bigDeleteChance: state.config.bigDeleteChance,
+      },
+    };
+    try {
+      chrome.storage.local.set({ [STORAGE_KEY]: payload });
+    } catch (err) {
+      console.warn("[HumanTyper] Could not persist settings:", err);
+    }
+  }
+
+  function persistDebounced() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(persistNow, 150);
+  }
+
+  function loadPersisted(callback) {
+    if (!chrome?.storage?.local) {
+      callback(null);
+      return;
+    }
+    try {
+      chrome.storage.local.get([STORAGE_KEY], (result) => {
+        callback(result?.[STORAGE_KEY] || null);
+      });
+    } catch (err) {
+      console.warn("[HumanTyper] Could not load settings:", err);
+      callback(null);
+    }
+  }
+
   // ---------- DOM helpers ----------
   function el(tag, attrs = {}, children = []) {
     const node = document.createElement(tag);
@@ -94,6 +143,7 @@
       const v = Number(input.value);
       valEl.textContent = format(v);
       onSliderChange(id, v);
+      persistDebounced();
     });
     const row = el("div", { class: "ht-row" }, [
       el("label", { for: id }, label),
@@ -229,13 +279,7 @@
     }
   });
 
-  function selectPreset(name) {
-    state.presetName = name;
-    state.config = Presets.get(name);
-    for (const [k, btn] of Object.entries(presetButtons)) {
-      btn.classList.toggle("ht-active", k === name);
-    }
-    // Sync sliders to the preset values.
+  function syncSlidersFromConfig() {
     wpmSlider.input.value = String(state.config.wpm);
     wpmSlider.valEl.textContent = `${state.config.wpm} wpm`;
     jitterSlider.input.value = String(Math.round(state.config.jitter * 100));
@@ -254,6 +298,16 @@
     bigDelSlider.valEl.textContent = `${Math.round(
       state.config.bigDeleteChance * 100
     )}%`;
+  }
+
+  function selectPreset(name) {
+    state.presetName = name;
+    state.config = Presets.get(name);
+    for (const [k, btn] of Object.entries(presetButtons)) {
+      btn.classList.toggle("ht-active", k === name);
+    }
+    syncSlidersFromConfig();
+    persistDebounced();
   }
 
   function onSliderChange(id, v) {
@@ -276,7 +330,38 @@
     }
   }
 
-  selectPreset(Presets.DEFAULT_PRESET);
+  // Load saved state (textarea, preset, slider values) and apply it.
+  // Suppress saves during initial load so we don't write back what we just read.
+  suppressSave = true;
+  loadPersisted((saved) => {
+    const presetName =
+      saved?.presetName && Presets.PRESETS[saved.presetName]
+        ? saved.presetName
+        : Presets.DEFAULT_PRESET;
+    selectPreset(presetName);
+    if (saved?.config && typeof saved.config === "object") {
+      // Layer saved slider values over the preset's defaults.
+      for (const k of [
+        "wpm",
+        "jitter",
+        "typoRate",
+        "thinkingPauseChance",
+        "bigDeleteChance",
+      ]) {
+        if (typeof saved.config[k] === "number") {
+          state.config[k] = saved.config[k];
+        }
+      }
+      syncSlidersFromConfig();
+    }
+    if (typeof saved?.text === "string") {
+      textArea.value = saved.text;
+    }
+    suppressSave = false;
+  });
+
+  // Persist textarea edits (debounced).
+  textArea.addEventListener("input", () => persistDebounced());
 
   // ---------- Cursor indicator ----------
   // Locate the Google Docs caret overlay on screen and follow it.
