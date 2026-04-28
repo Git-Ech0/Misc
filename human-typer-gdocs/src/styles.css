@@ -1,0 +1,313 @@
+/* Human Typer for Google Docs — sidebar UI */
+
+#human-typer-root,
+#human-typer-root * {
+  box-sizing: border-box;
+  font-family: "Google Sans", "Roboto", system-ui, -apple-system, "Segoe UI",
+    sans-serif;
+}
+
+#human-typer-root {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: 360px;
+  z-index: 2147483646;
+  background: #ffffff;
+  border-left: 1px solid #dadce0;
+  box-shadow: -4px 0 12px rgba(60, 64, 67, 0.12);
+  color: #202124;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#human-typer-root.ht-open {
+  transform: translateX(0);
+}
+
+#human-typer-root .ht-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid #e8eaed;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(135deg, #4285f4 0%, #1a73e8 100%);
+  color: #fff;
+}
+
+#human-typer-root .ht-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+}
+
+#human-typer-root .ht-close {
+  background: transparent;
+  border: 0;
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+#human-typer-root .ht-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+#human-typer-root .ht-body {
+  padding: 14px 16px;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+#human-typer-root .ht-section {
+  margin-bottom: 16px;
+}
+
+#human-typer-root .ht-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #5f6368;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 6px;
+}
+
+#human-typer-root .ht-textarea {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+  color: #202124;
+  background: #fff;
+}
+
+#human-typer-root .ht-textarea:focus {
+  outline: none;
+  border-color: #1a73e8;
+  box-shadow: 0 0 0 1px #1a73e8;
+}
+
+#human-typer-root .ht-presets {
+  display: flex;
+  gap: 6px;
+}
+
+#human-typer-root .ht-preset-btn {
+  flex: 1 1 0;
+  padding: 8px 6px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid #dadce0;
+  background: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #3c4043;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+#human-typer-root .ht-preset-btn:hover {
+  background: #f1f3f4;
+}
+
+#human-typer-root .ht-preset-btn.ht-active {
+  background: #e8f0fe;
+  border-color: #1a73e8;
+  color: #1a73e8;
+}
+
+#human-typer-root .ht-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+#human-typer-root .ht-row label {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: #3c4043;
+}
+
+#human-typer-root .ht-row .ht-value {
+  min-width: 56px;
+  text-align: right;
+  font-size: 12px;
+  color: #5f6368;
+  font-variant-numeric: tabular-nums;
+}
+
+#human-typer-root .ht-row input[type="range"] {
+  flex: 0 0 130px;
+}
+
+#human-typer-root .ht-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #e8eaed;
+  background: #f8f9fa;
+}
+
+#human-typer-root .ht-btn {
+  flex: 1 1 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 0;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+#human-typer-root .ht-btn-primary {
+  background: #1a73e8;
+  color: #fff;
+}
+#human-typer-root .ht-btn-primary:hover {
+  background: #1765cc;
+}
+#human-typer-root .ht-btn-primary:disabled {
+  background: #c5d8f5;
+  cursor: not-allowed;
+}
+
+#human-typer-root .ht-btn-secondary {
+  background: #fff;
+  color: #1a73e8;
+  border: 1px solid #dadce0;
+}
+#human-typer-root .ht-btn-secondary:hover {
+  background: #f1f3f4;
+}
+
+#human-typer-root .ht-btn-danger {
+  background: #fff;
+  color: #d93025;
+  border: 1px solid #dadce0;
+}
+#human-typer-root .ht-btn-danger:hover {
+  background: #fce8e6;
+}
+
+#human-typer-root .ht-status {
+  font-size: 12px;
+  color: #5f6368;
+  padding: 8px 16px;
+  border-top: 1px solid #e8eaed;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#human-typer-root .ht-status .ht-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9aa0a6;
+}
+#human-typer-root .ht-status[data-state="typing"] .ht-dot {
+  background: #34a853;
+  box-shadow: 0 0 0 0 rgba(52, 168, 83, 0.6);
+  animation: ht-pulse 1.1s ease-in-out infinite;
+}
+#human-typer-root .ht-status[data-state="paused"] .ht-dot {
+  background: #fbbc04;
+}
+#human-typer-root .ht-status[data-state="rewriting"] .ht-dot {
+  background: #ea4335;
+}
+#human-typer-root .ht-status[data-state="done"] .ht-dot {
+  background: #1a73e8;
+}
+
+@keyframes ht-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(52, 168, 83, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(52, 168, 83, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 168, 83, 0);
+  }
+}
+
+#human-typer-root .ht-progress {
+  height: 4px;
+  width: 100%;
+  background: #e8eaed;
+  border-radius: 2px;
+  overflow: hidden;
+}
+#human-typer-root .ht-progress > div {
+  height: 100%;
+  width: 0;
+  background: #1a73e8;
+  transition: width 180ms ease;
+}
+
+/* Floating handle (when sidebar is closed) */
+#human-typer-handle {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  z-index: 2147483645;
+  background: #1a73e8;
+  color: #fff;
+  border: 0;
+  padding: 10px 8px;
+  border-radius: 6px 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  box-shadow: -2px 2px 6px rgba(60, 64, 67, 0.2);
+}
+#human-typer-handle:hover {
+  background: #1765cc;
+}
+
+/* In-document cursor indicator (where typing is happening) */
+#human-typer-cursor-indicator {
+  position: fixed;
+  z-index: 2147483644;
+  pointer-events: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(26, 115, 232, 0.18);
+  border: 2px solid #1a73e8;
+  box-shadow: 0 0 0 0 rgba(26, 115, 232, 0.4);
+  animation: ht-pulse-blue 1.1s ease-in-out infinite;
+  display: none;
+}
+#human-typer-cursor-indicator.ht-visible {
+  display: block;
+}
+@keyframes ht-pulse-blue {
+  0% {
+    box-shadow: 0 0 0 0 rgba(26, 115, 232, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgba(26, 115, 232, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(26, 115, 232, 0);
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Human Typer for Google Docs",
+  "version": "0.1.0",
+  "description": "Demo / educational extension that retypes provided text into a Google Doc with human-like timing, typos, and corrections.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Human Typer for Google Docs",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://docs.google.com/document/*"],
+      "js": ["src/engine.js", "src/presets.js", "src/content.js"],
+      "css": ["src/styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["https://docs.google.com/*"]
+}
