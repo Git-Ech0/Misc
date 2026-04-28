@@ -36,6 +36,10 @@ texts) occasional "rewrite this sentence" delete-and-retype edits.
     Sentence).
 - **Live progress + status** bar with a pulsing indicator that tracks the
   Google Docs caret on screen.
+- **Persistent settings** — the textarea contents, selected preset, and all
+  slider values are saved to `chrome.storage.local` (debounced) and restored
+  the next time the sidebar opens, even after a page reload or in a different
+  Google Doc.
 
 ## Installation (load unpacked)
 
