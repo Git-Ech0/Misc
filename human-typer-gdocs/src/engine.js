@@ -92,20 +92,70 @@
     return true;
   }
 
+  // US-layout virtual key codes for punctuation. The engine MUST use real
+  // virtual key codes here — using `charCodeAt(0)` collides with real keys
+  // (e.g. apostrophe = 39 = ArrowRight, period = 46 = Delete), which causes
+  // Google Docs to move the cursor or delete content instead of inserting
+  // text.
+  const PUNCT_VK = {
+    " ": 32,
+    "`": 192, "~": 192,
+    "-": 189, "_": 189,
+    "=": 187, "+": 187,
+    "[": 219, "{": 219,
+    "]": 221, "}": 221,
+    "\\": 220, "|": 220,
+    ";": 186, ":": 186,
+    "'": 222, "\"": 222,
+    ",": 188, "<": 188,
+    ".": 190, ">": 190,
+    "/": 191, "?": 191,
+    "!": 49, "@": 50, "#": 51, "$": 52, "%": 53,
+    "^": 54, "&": 55, "*": 56, "(": 57, ")": 48,
+  };
+
+  // KeyboardEvent.code values for punctuation (US layout, physical position).
+  const PUNCT_CODE = {
+    " ": "Space",
+    "`": "Backquote", "~": "Backquote",
+    "-": "Minus", "_": "Minus",
+    "=": "Equal", "+": "Equal",
+    "[": "BracketLeft", "{": "BracketLeft",
+    "]": "BracketRight", "}": "BracketRight",
+    "\\": "Backslash", "|": "Backslash",
+    ";": "Semicolon", ":": "Semicolon",
+    "'": "Quote", "\"": "Quote",
+    ",": "Comma", "<": "Comma",
+    ".": "Period", ">": "Period",
+    "/": "Slash", "?": "Slash",
+    "!": "Digit1", "@": "Digit2", "#": "Digit3", "$": "Digit4", "%": "Digit5",
+    "^": "Digit6", "&": "Digit7", "*": "Digit8", "(": "Digit9", ")": "Digit0",
+  };
+
+  function virtualKeyCodeFor(ch) {
+    if (ch.length !== 1) return 0;
+    if (ch >= "A" && ch <= "Z") return ch.charCodeAt(0); // 65-90
+    if (ch >= "a" && ch <= "z") return ch.charCodeAt(0) - 32; // map to 65-90
+    if (ch >= "0" && ch <= "9") return ch.charCodeAt(0); // 48-57
+    return PUNCT_VK[ch] || 0;
+  }
+
+  function codeFor(ch) {
+    if (ch.length !== 1) return "";
+    if (/[a-zA-Z]/.test(ch)) return "Key" + ch.toUpperCase();
+    if (/[0-9]/.test(ch)) return "Digit" + ch;
+    return PUNCT_CODE[ch] || "";
+  }
+
   function keyEventInit(key, opts = {}) {
-    const code =
-      key.length === 1
-        ? /[a-zA-Z]/.test(key)
-          ? "Key" + key.toUpperCase()
-          : /[0-9]/.test(key)
-            ? "Digit" + key
-            : ""
-        : key;
+    const isSingle = key.length === 1;
+    const code = isSingle ? codeFor(key) : key;
+    const vk = isSingle ? virtualKeyCodeFor(key) : (opts.keyCode || 0);
     return {
       key,
       code,
-      keyCode: key.length === 1 ? key.charCodeAt(0) : opts.keyCode || 0,
-      which: key.length === 1 ? key.charCodeAt(0) : opts.keyCode || 0,
+      keyCode: vk,
+      which: vk,
       bubbles: true,
       cancelable: true,
       composed: true,
