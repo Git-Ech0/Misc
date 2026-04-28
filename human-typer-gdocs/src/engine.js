@@ -147,15 +147,33 @@
     return PUNCT_CODE[ch] || "";
   }
 
+  // Real browsers dispatch DIFFERENT keyCode values on keydown/keyup vs
+  // keypress for character-producing keys:
+  //   keydown/keyup.keyCode  = virtual key code (e.g. ' = 222, . = 190, a = 65)
+  //   keypress.keyCode/which = character code  (e.g. ' = 39,  . = 46, a = 97)
+  // Google Docs reads both. If keypress sends the VK code, Docs maps it
+  // through String.fromCharCode and inserts garbage (' -> Þ, . -> ¾, lowercase
+  // letters -> uppercase). If keydown/keyup send the char code, the VK
+  // collides with real keys (' = 39 = ArrowRight, . = 46 = Delete).
+  // So we build two separate inits per character.
   function keyEventInit(key, opts = {}) {
+    const eventKind = opts.eventKind || "keydown"; // "keydown" | "keyup" | "keypress"
     const isSingle = key.length === 1;
     const code = isSingle ? codeFor(key) : key;
-    const vk = isSingle ? virtualKeyCodeFor(key) : (opts.keyCode || 0);
+    let kc;
+    if (isSingle) {
+      kc = eventKind === "keypress"
+        ? key.charCodeAt(0)
+        : virtualKeyCodeFor(key);
+    } else {
+      kc = opts.keyCode || 0;
+    }
     return {
       key,
       code,
-      keyCode: vk,
-      which: vk,
+      keyCode: kc,
+      which: kc,
+      charCode: eventKind === "keypress" && isSingle ? key.charCodeAt(0) : 0,
       bubbles: true,
       cancelable: true,
       composed: true,
@@ -184,10 +202,13 @@
   function sendChar(ch) {
     const t = getDocsTarget();
     if (!t) return false;
-    const init = keyEventInit(ch, { shiftKey: needsShift(ch) });
+    const shift = needsShift(ch);
+    const downInit = keyEventInit(ch, { shiftKey: shift, eventKind: "keydown" });
+    const pressInit = keyEventInit(ch, { shiftKey: shift, eventKind: "keypress" });
+    const upInit = keyEventInit(ch, { shiftKey: shift, eventKind: "keyup" });
 
-    dispatchKey(t.target, "keydown", init);
-    dispatchKey(t.target, "keypress", init);
+    dispatchKey(t.target, "keydown", downInit);
+    dispatchKey(t.target, "keypress", pressInit);
     // textInput is the legacy event Google Docs historically listens for.
     dispatchInput(t.target, "textInput", { data: ch, bubbles: true, cancelable: true });
     dispatchInput(t.target, "beforeinput", {
@@ -202,7 +223,7 @@
       bubbles: true,
       cancelable: true,
     });
-    dispatchKey(t.target, "keyup", init);
+    dispatchKey(t.target, "keyup", upInit);
     return true;
   }
 
