@@ -1,0 +1,155 @@
+<!doctype html>
+<!--
+  Synthetic stand-in for an Oracle Simphony "Sales by Weekday" report.
+  Used for local end-to-end testing of the extension's floating button +
+  table extractor.  Mirrors the structures Oracle JET tends to render:
+    1. a native <table> inside <oj-table>
+    2. an ARIA-only <oj-data-grid>-shaped grid
+-->
+<html lang="en-US" dir="ltr" class="oj-agent-os-windows oj-agent-browser-chrome">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sales by Weekday | Reports | Kilwins Chocolates Franchise (Test Fixture)</title>
+    <style>
+      body {
+        font-family: -apple-system, "Oracle Sans", Segoe UI, Roboto, sans-serif;
+        background: #f4f1ec;
+        color: #1f1408;
+        margin: 0;
+        padding: 24px;
+      }
+      h1, h2 { margin: 0 0 12px; color: #5b3a1c; }
+      .panel {
+        background: #fff;
+        border: 1px solid #e5dccb;
+        border-radius: 8px;
+        padding: 18px 20px 24px;
+        margin-bottom: 24px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 8px;
+      }
+      th, td {
+        text-align: left;
+        padding: 6px 10px;
+        border-bottom: 1px solid #ece4d3;
+      }
+      thead th { background: #fbf6ec; font-weight: 600; }
+      .oj-data-grid {
+        border: 1px solid #ece4d3;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .oj-data-grid [role="row"] {
+        display: grid;
+        grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+      }
+      .oj-data-grid [role="columnheader"] {
+        background: #fbf6ec;
+        padding: 8px 10px;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .oj-data-grid [role="gridcell"] {
+        padding: 6px 10px;
+        font-size: 13px;
+        border-top: 1px solid #ece4d3;
+      }
+      caption { caption-side: top; font-weight: 600; padding: 6px 0; text-align: left; }
+    </style>
+  </head>
+  <body>
+    <h1>Sales by Weekday</h1>
+    <div class="panel">
+      <h2>Daily totals (oj-table style)</h2>
+      <oj-table aria-label="Sales by Weekday">
+        <table>
+          <caption>Sales by Weekday — Test fixture</caption>
+          <thead>
+            <tr>
+              <th>Weekday</th>
+              <th>Net Sales</th>
+              <th>Quantity</th>
+              <th>Discount</th>
+              <th>Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Monday</td>    <td>$1,200.00</td> <td>300</td> <td>$10.00</td> <td>$420.00</td></tr>
+            <tr><td>Tuesday</td>   <td>$1,100.00</td> <td>270</td> <td>$5.00</td>  <td>$390.00</td></tr>
+            <tr><td>Wednesday</td> <td>$1,500.00</td> <td>350</td> <td>$0.00</td>  <td>$510.00</td></tr>
+            <tr><td>Thursday</td>  <td>$2,400.00</td> <td>510</td> <td>$25.00</td> <td>$830.00</td></tr>
+            <tr><td>Friday</td>    <td>$3,800.00</td> <td>780</td> <td>$30.00</td> <td>$1,250.00</td></tr>
+            <tr><td>Saturday</td>  <td>$4,600.00</td> <td>910</td> <td>$45.00</td> <td>$1,520.00</td></tr>
+            <tr><td>Sunday</td>    <td>$2,000.00</td> <td>440</td> <td>$10.00</td> <td>$700.00</td></tr>
+          </tbody>
+        </table>
+      </oj-table>
+    </div>
+
+    <div class="panel">
+      <h2>Top menu items (oj-data-grid / ARIA style)</h2>
+      <div class="oj-data-grid" role="grid" aria-label="Top menu items">
+        <div role="row">
+          <div role="columnheader">Menu Item</div>
+          <div role="columnheader">Quantity Sold</div>
+          <div role="columnheader">Net Sales</div>
+          <div role="columnheader">Cost</div>
+          <div role="columnheader">Discount</div>
+        </div>
+        <div role="row">
+          <div role="gridcell">Mackinac Island Fudge</div>
+          <div role="gridcell">200</div>
+          <div role="gridcell">$1,600.00</div>
+          <div role="gridcell">$520.00</div>
+          <div role="gridcell">$0.00</div>
+        </div>
+        <div role="row">
+          <div role="gridcell">Caramel Apple</div>
+          <div role="gridcell">120</div>
+          <div role="gridcell">$960.00</div>
+          <div role="gridcell">$300.00</div>
+          <div role="gridcell">$0.00</div>
+        </div>
+        <div role="row">
+          <div role="gridcell">Tuxedo Fudge</div>
+          <div role="gridcell">80</div>
+          <div role="gridcell">$640.00</div>
+          <div role="gridcell">$240.00</div>
+          <div role="gridcell">$10.00</div>
+        </div>
+        <div role="row">
+          <div role="gridcell">Sea Salt Caramel Bark</div>
+          <div role="gridcell">30</div>
+          <div role="gridcell">$420.00</div>
+          <div role="gridcell">$60.00</div>
+          <div role="gridcell">$0.00</div>
+        </div>
+        <div role="row">
+          <div role="gridcell">Almond Butter Toffee</div>
+          <div role="gridcell">12</div>
+          <div role="gridcell">$216.00</div>
+          <div role="gridcell">$30.00</div>
+          <div role="gridcell">$0.00</div>
+        </div>
+        <div role="row">
+          <div role="gridcell">Plain Chocolate Bar</div>
+          <div role="gridcell">240</div>
+          <div role="gridcell">$720.00</div>
+          <div role="gridcell">$540.00</div>
+          <div role="gridcell">$120.00</div>
+        </div>
+        <div role="row">
+          <div role="gridcell">Bear Claw</div>
+          <div role="gridcell">8</div>
+          <div role="gridcell">$80.00</div>
+          <div role="gridcell">$28.00</div>
+          <div role="gridcell">$0.00</div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

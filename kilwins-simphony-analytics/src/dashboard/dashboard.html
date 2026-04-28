@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kilwins Simphony Analytics</title>
+    <link rel="stylesheet" href="dashboard.css" />
+  </head>
+  <body>
+    <header class="dash-header">
+      <div class="dash-header-inner">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">K</div>
+          <div class="brand-text">
+            <div class="brand-title">Kilwins Simphony Analytics</div>
+            <div class="brand-sub" id="meta-line">Loading snapshot…</div>
+          </div>
+        </div>
+        <div class="dash-actions">
+          <button id="export-json" class="btn btn-ghost" type="button">Export JSON</button>
+          <button id="export-csv" class="btn btn-ghost" type="button">Export CSV</button>
+          <button id="reanalyze" class="btn btn-primary" type="button">Re-run analysis</button>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section id="empty-state" class="empty hidden">
+        <h2>No data yet</h2>
+        <p>
+          Open a report on the Oracle Simphony portal, click the floating
+          <strong>Analyze report</strong> button in the bottom-right corner,
+          and the captured data will land here.
+        </p>
+      </section>
+
+      <section id="report-list"></section>
+    </main>
+
+    <footer class="dash-footer">
+      <div>Snapshots stay in your browser only — nothing leaves this device.</div>
+    </footer>
+
+    <script src="../lib/analyzer.js"></script>
+    <script src="dashboard.js"></script>
+  </body>
+</html>
