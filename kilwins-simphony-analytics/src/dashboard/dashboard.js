@@ -1,25 +1,34 @@
 /*
  * Dashboard renderer.
  *
- * Reads the snapshot ID from location.hash, loads the payload from
- * chrome.storage.local, runs analyzer.js over each dataset, and renders
- * insight cards and a raw data preview per dataset.
+ * The dashboard is the entire extension UI.  Users drop an .xlsx export from
+ * the Oracle Simphony portal onto the page (or pick one with the file
+ * picker), the file is parsed locally with SheetJS, sliced into datasets by
+ * sheet-parser.js, and analyzer.js produces the recommendation cards.
+ *
+ * No network calls are ever made.
  */
 (function () {
   "use strict";
 
   const els = {
     main: document.getElementById("main"),
-    empty: document.getElementById("empty-state"),
+    dropzone: document.getElementById("dropzone"),
     list: document.getElementById("report-list"),
     metaLine: document.getElementById("meta-line"),
+    pickFile: document.getElementById("pick-file"),
+    pickFile2: document.getElementById("pick-file-2"),
+    fileInput: document.getElementById("file-input"),
     exportJson: document.getElementById("export-json"),
     exportCsv: document.getElementById("export-csv"),
-    reanalyze: document.getElementById("reanalyze"),
+    clear: document.getElementById("clear"),
+    status: document.getElementById("status"),
   };
 
-  let currentPayload = null;
-  let currentSnapshotId = null;
+  let currentSnapshot = null; // { fileName, parsedAt, datasets, parameters, sheetNames }
+  let currentAnalyses = null;
+
+  // ---------- helpers -------------------------------------------------------
 
   function escHtml(s) {
     return String(s == null ? "" : s)
@@ -29,36 +38,126 @@
       .replace(/"/g, "&quot;");
   }
 
-  // ---------- loading -------------------------------------------------------
-
-  function getSnapshotIdFromHash() {
-    const h = (location.hash || "").replace(/^#/, "");
-    return h ? decodeURIComponent(h) : null;
+  function setStatus(msg, kind) {
+    if (!msg) {
+      els.status.classList.add("hidden");
+      els.status.textContent = "";
+      els.status.removeAttribute("data-kind");
+      return;
+    }
+    els.status.textContent = msg;
+    els.status.classList.remove("hidden");
+    if (kind) els.status.setAttribute("data-kind", kind);
+    else els.status.removeAttribute("data-kind");
   }
 
-  async function loadPayload() {
-    const id = getSnapshotIdFromHash();
-    if (!id) return null;
-    const res = await chrome.storage.local.get(id);
-    if (!res || !res[id]) return null;
-    currentSnapshotId = id;
-    return res[id];
+  function setControlsEnabled(enabled) {
+    [els.exportJson, els.exportCsv, els.clear].forEach((b) => {
+      if (!b) return;
+      if (enabled) b.removeAttribute("disabled");
+      else b.setAttribute("disabled", "");
+    });
+  }
+
+  // ---------- file ingestion ------------------------------------------------
+
+  function readFileAsArrayBuffer(file) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = () => reject(fr.error || new Error("FileReader failed"));
+      fr.readAsArrayBuffer(file);
+    });
+  }
+
+  async function ingestFile(file) {
+    if (!file) return;
+    setStatus(`Parsing ${file.name}…`, "info");
+    try {
+      const buf = await readFileAsArrayBuffer(file);
+      const wb = XLSX.read(buf, { type: "array", cellDates: false });
+
+      const datasets = [];
+      const parameters = [];
+      for (const sheetName of wb.SheetNames) {
+        const sheet = wb.Sheets[sheetName];
+        const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
+        const sourceLabel = `${file.name} · ${sheetName}`;
+        const r = window.KilwinsSheetParser.parseAOA(aoa, sourceLabel);
+        for (const ds of r.datasets) {
+          ds.parameters = r.parameters; // expose for context-aware analysis
+          ds.sheetName = sheetName;
+        }
+        datasets.push(...r.datasets);
+        parameters.push(...r.parameters);
+      }
+
+      if (!datasets.length) {
+        setStatus(
+          `Couldn't find any tabular data in ${file.name}. Make sure the file is an Oracle Simphony report export.`,
+          "error"
+        );
+        return;
+      }
+
+      currentSnapshot = {
+        fileName: file.name,
+        fileSize: file.size,
+        parsedAt: new Date().toISOString(),
+        sheetNames: wb.SheetNames.slice(),
+        datasets,
+        parameters,
+      };
+      currentAnalyses = window.KilwinsAnalyzer.analyzeAll(datasets);
+
+      renderAll();
+      setControlsEnabled(true);
+      setStatus("", null);
+    } catch (err) {
+      console.error("ingest failed:", err);
+      setStatus(`Couldn't parse ${file.name}: ${err && err.message ? err.message : err}`, "error");
+    }
   }
 
   // ---------- rendering -----------------------------------------------------
 
-  function renderMeta(payload) {
-    const m = payload.meta || {};
-    const dt = m.capturedAt ? new Date(m.capturedAt) : new Date();
-    const where = m.sourceTabUrl || m.url || "(unknown URL)";
-    const tabTitle = m.sourceTabTitle || m.title || "Oracle Simphony report";
-    const skipped = (payload.skippedFrames || []).length;
-    const skippedNote = skipped ? ` · ${skipped} cross-origin frame(s) skipped` : "";
+  function renderMeta() {
+    if (!currentSnapshot) {
+      els.metaLine.textContent = "Drop a Simphony report .xlsx export to begin.";
+      return;
+    }
+    const dt = new Date(currentSnapshot.parsedAt);
+    const sizeKb = (currentSnapshot.fileSize / 1024).toFixed(1);
+    const dsCount = currentSnapshot.datasets.length;
+    const sheetCount = currentSnapshot.sheetNames.length;
     els.metaLine.innerHTML =
-      `Snapshot of <strong>${escHtml(tabTitle)}</strong> · ` +
+      `<strong>${escHtml(currentSnapshot.fileName)}</strong> · ` +
       `${escHtml(dt.toLocaleString())} · ` +
-      `<a href="${escHtml(where)}" target="_blank" rel="noopener">source</a>` +
-      escHtml(skippedNote);
+      `${sheetCount} sheet${sheetCount === 1 ? "" : "s"} · ` +
+      `${dsCount} report block${dsCount === 1 ? "" : "s"} · ` +
+      `${sizeKb} KB · parsed locally`;
+  }
+
+  function renderParameters(parameters) {
+    if (!parameters || !parameters.length) return null;
+    const box = document.createElement("section");
+    box.className = "params-block";
+    const ul = document.createElement("ul");
+    for (const p of parameters) {
+      const value = (p.value == null ? "" : String(p.value)).trim();
+      const key = (p.key == null ? "" : String(p.key)).trim();
+      if (!key && !value) continue;
+      if (/^blank$/i.test(key) && !value) continue;
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="lbl">${escHtml(key)}</span><span class="val">${escHtml(value)}</span>`;
+      ul.appendChild(li);
+    }
+    if (!ul.children.length) return null;
+    const head = document.createElement("h3");
+    head.textContent = "Report parameters";
+    box.appendChild(head);
+    box.appendChild(ul);
+    return box;
   }
 
   function renderInsightCard(card) {
@@ -112,7 +211,7 @@
     const wrap = document.createElement("details");
     wrap.className = "raw-preview";
     const summary = document.createElement("summary");
-    summary.textContent = `Raw captured rows (${ds.rowCount.toLocaleString()})`;
+    summary.textContent = `Raw rows (${ds.rowCount.toLocaleString()})`;
     wrap.appendChild(summary);
 
     const tableWrap = document.createElement("div");
@@ -123,7 +222,7 @@
       "<tr>" + ds.headers.map((h) => `<th>${escHtml(h)}</th>`).join("") + "</tr>";
     tbl.appendChild(thead);
     const tbody = document.createElement("tbody");
-    const previewRows = ds.rows.slice(0, 200);
+    const previewRows = ds.rows.slice(0, 250);
     for (const row of previewRows) {
       const tr = document.createElement("tr");
       tr.innerHTML = row.map((c) => `<td>${escHtml(c)}</td>`).join("");
@@ -141,20 +240,6 @@
     return wrap;
   }
 
-  function renderRolePills(roles) {
-    if (!roles) return "";
-    const pills = [];
-    for (const [k, v] of Object.entries(roles)) {
-      if (!v || !v.length) continue;
-      pills.push(
-        `<span class="role-pill" title="${escHtml(v.join(", "))}">${escHtml(k)}: ${escHtml(
-          v.join(", ")
-        )}</span>`
-      );
-    }
-    return pills.length ? `<div class="role-pills">${pills.join("")}</div>` : "";
-  }
-
   function renderDataset(ds, analysis) {
     const block = document.createElement("section");
     block.className = "report-block";
@@ -167,11 +252,10 @@
         <span>${ds.rowCount.toLocaleString()} rows</span>
         <span>${ds.columnCount.toLocaleString()} columns</span>
         <span>type: <code>${escHtml(ds.kind)}</code></span>
+        ${ds.sheetName ? `<span>sheet: <code>${escHtml(ds.sheetName)}</code></span>` : ""}
       </div>
     `;
     block.appendChild(head);
-
-    block.insertAdjacentHTML("beforeend", renderRolePills(analysis.roles));
 
     if (analysis.insights && analysis.insights.length) {
       const grid = document.createElement("div");
@@ -190,24 +274,28 @@
     return block;
   }
 
-  function renderAll(payload) {
+  function renderAll() {
     els.list.innerHTML = "";
-    if (!payload || !payload.datasets || payload.datasets.length === 0) {
-      els.empty.classList.remove("hidden");
+    renderMeta();
+
+    if (!currentSnapshot) {
+      els.dropzone.classList.remove("hidden");
       return;
     }
-    els.empty.classList.add("hidden");
 
-    const analyses = window.KilwinsAnalyzer.analyzeAll(payload.datasets);
-    payload.datasets.forEach((ds, i) => {
-      els.list.appendChild(renderDataset(ds, analyses[i]));
+    els.dropzone.classList.add("hidden");
+    const params = renderParameters(currentSnapshot.parameters);
+    if (params) els.list.appendChild(params);
+
+    currentSnapshot.datasets.forEach((ds, i) => {
+      els.list.appendChild(renderDataset(ds, currentAnalyses[i]));
     });
   }
 
   // ---------- exports -------------------------------------------------------
 
-  function downloadBlob(filename, mime, text) {
-    const blob = new Blob([text], { type: mime });
+  function downloadBlob(filename, mime, content) {
+    const blob = content instanceof Blob ? content : new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -226,59 +314,122 @@
     return t;
   }
 
-  function buildCsv(payload) {
-    if (!payload || !payload.datasets) return "";
+  function buildCsv() {
+    if (!currentSnapshot) return "";
     const out = [];
-    payload.datasets.forEach((ds, idx) => {
-      out.push(`# Dataset ${idx + 1}: ${ds.title}`);
+    currentSnapshot.datasets.forEach((ds, idx) => {
+      out.push(`# Dataset ${idx + 1}: ${ds.title} (${ds.rowCount} rows)`);
       out.push(ds.headers.map(csvEscape).join(","));
-      for (const row of ds.rows) {
-        out.push(row.map(csvEscape).join(","));
-      }
+      for (const row of ds.rows) out.push(row.map(csvEscape).join(","));
       out.push("");
     });
     return out.join("\n");
   }
 
-  function setupExportHandlers() {
+  function buildJsonExport() {
+    if (!currentSnapshot) return "";
+    const payload = {
+      fileName: currentSnapshot.fileName,
+      parsedAt: currentSnapshot.parsedAt,
+      sheetNames: currentSnapshot.sheetNames,
+      parameters: currentSnapshot.parameters,
+      datasets: currentSnapshot.datasets.map((ds) => ({
+        id: ds.id,
+        title: ds.title,
+        kind: ds.kind,
+        sheetName: ds.sheetName,
+        headers: ds.headers,
+        rows: ds.rows,
+      })),
+      analyses: currentAnalyses,
+    };
+    return JSON.stringify(payload, null, 2);
+  }
+
+  // ---------- event wiring --------------------------------------------------
+
+  function pickFile() {
+    els.fileInput.click();
+  }
+
+  function clearAll() {
+    currentSnapshot = null;
+    currentAnalyses = null;
+    setControlsEnabled(false);
+    setStatus("", null);
+    renderAll();
+  }
+
+  function setupHandlers() {
+    if (els.pickFile) els.pickFile.addEventListener("click", pickFile);
+    if (els.pickFile2) els.pickFile2.addEventListener("click", pickFile);
+    els.fileInput.addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) ingestFile(file);
+      els.fileInput.value = "";
+    });
     els.exportJson.addEventListener("click", () => {
-      if (!currentPayload) return;
+      if (!currentSnapshot) return;
       downloadBlob(
         "kilwins-snapshot-" + Date.now() + ".json",
         "application/json",
-        JSON.stringify(currentPayload, null, 2)
+        buildJsonExport()
       );
     });
     els.exportCsv.addEventListener("click", () => {
-      if (!currentPayload) return;
-      downloadBlob("kilwins-snapshot-" + Date.now() + ".csv", "text/csv", buildCsv(currentPayload));
+      if (!currentSnapshot) return;
+      downloadBlob("kilwins-snapshot-" + Date.now() + ".csv", "text/csv", buildCsv());
     });
-    els.reanalyze.addEventListener("click", () => {
-      if (!currentPayload) return;
-      renderAll(currentPayload);
-    });
-  }
+    els.clear.addEventListener("click", clearAll);
 
-  // ---------- bootstrap -----------------------------------------------------
-
-  async function init() {
-    setupExportHandlers();
-    try {
-      const payload = await loadPayload();
-      if (!payload) {
-        els.empty.classList.remove("hidden");
-        els.metaLine.textContent =
-          "No snapshot loaded. Open a Simphony report and click the Analyze button.";
+    // Drag-and-drop on the entire main element
+    const dropTarget = document.body;
+    let dragDepth = 0;
+    function onDragEnter(e) {
+      e.preventDefault();
+      dragDepth += 1;
+      document.body.classList.add("dragging");
+    }
+    function onDragOver(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    }
+    function onDragLeave(e) {
+      e.preventDefault();
+      dragDepth -= 1;
+      if (dragDepth <= 0) {
+        dragDepth = 0;
+        document.body.classList.remove("dragging");
+      }
+    }
+    async function onDrop(e) {
+      e.preventDefault();
+      dragDepth = 0;
+      document.body.classList.remove("dragging");
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || files.length === 0) return;
+      // Only the first file
+      const file = files[0];
+      const lower = file.name.toLowerCase();
+      if (!/\.(xlsx|xlsm|xls|csv)$/i.test(lower)) {
+        setStatus(
+          `Only .xlsx, .xlsm, .xls and .csv exports are supported. Got: ${file.name}`,
+          "error"
+        );
         return;
       }
-      currentPayload = payload;
-      renderMeta(payload);
-      renderAll(payload);
-    } catch (err) {
-      console.error("Dashboard failed:", err);
-      els.metaLine.textContent = "Error loading snapshot: " + (err && err.message);
-      els.empty.classList.remove("hidden");
+      await ingestFile(file);
     }
+    dropTarget.addEventListener("dragenter", onDragEnter);
+    dropTarget.addEventListener("dragover", onDragOver);
+    dropTarget.addEventListener("dragleave", onDragLeave);
+    dropTarget.addEventListener("drop", onDrop);
+  }
+
+  function init() {
+    setupHandlers();
+    setControlsEnabled(false);
+    renderAll();
   }
 
   if (document.readyState === "complete" || document.readyState === "interactive") {

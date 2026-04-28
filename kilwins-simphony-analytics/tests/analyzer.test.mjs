@@ -1,169 +1,212 @@
-/*
- * Pure-Node smoke tests for extractor.js + analyzer.js.
- *
- * No external test runner or package.json required.  Run with:
- *   node tests/analyzer.test.mjs
- *
- * We use jsdom-free DOM emulation by loading the lib files (which expose
- * a CommonJS interface when `module.exports` is available) and feeding
- * them a minimal DOM-shaped fixture instead of going through a browser.
- *
- * For HTML/ARIA scraping we ship a tiny inline DOM shim that's just
- * enough for the extractor's querySelector / aria-label / innerText calls.
- */
+// Smoke tests for the offline xlsx pipeline.
+//
+// Runs end-to-end against the real Sales by Weekday export the user shared:
+//   tests/fixtures/sales-by-weekday.xlsx
+//
+// Usage:
+//   node tests/analyzer.test.mjs
+// (xlsx must be importable; we install it in /tmp/xlsx_node and rely on
+//  NODE_PATH=/tmp/xlsx_node/node_modules)
 
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const here = path.dirname(fileURLToPath(import.meta.url));
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(HERE, "..");
+const FIXTURE = path.join(ROOT, "tests/fixtures/sales-by-weekday.xlsx");
 
-const Extractor = require(path.join(here, "..", "src", "lib", "extractor.js"));
-const Analyzer = require(path.join(here, "..", "src", "lib", "analyzer.js"));
+let XLSX;
+try {
+  XLSX = require("xlsx");
+} catch (e) {
+  console.error("✖ Could not load 'xlsx'. Install with:");
+  console.error("    cd /tmp && mkdir -p xlsx_node && cd xlsx_node && npm install xlsx");
+  console.error("  then run with: NODE_PATH=/tmp/xlsx_node/node_modules node tests/analyzer.test.mjs");
+  process.exit(1);
+}
 
-let pass = 0;
-let fail = 0;
+const Dataset = require(path.join(ROOT, "src/lib/dataset.js"));
+const SheetParser = require(path.join(ROOT, "src/lib/sheet-parser.js"));
+const Analyzer = require(path.join(ROOT, "src/lib/analyzer.js"));
 
-function ok(name, cond, detail) {
+let passed = 0;
+let failed = 0;
+const failures = [];
+
+function assert(name, cond, detail) {
   if (cond) {
-    pass++;
-    console.log("  ok  -", name);
+    passed += 1;
+    console.log(`  \u2713 ${name}`);
   } else {
-    fail++;
-    console.log("  FAIL-", name, detail ? "\n        " + detail : "");
+    failed += 1;
+    failures.push({ name, detail });
+    console.log(`  \u2717 ${name}${detail ? "  \u2192 " + detail : ""}`);
   }
 }
 
-function eq(name, actual, expected) {
-  ok(name, actual === expected, `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+function suite(name, fn) {
+  console.log(`\n${name}`);
+  fn();
 }
 
-// ---------------------------------------------------------------------------
-// 1. parseCellValue / inferColumnTypes
-// ---------------------------------------------------------------------------
+// ---------- parseCellValue ------------------------------------------------
 
-console.log("\nparseCellValue:");
-{
-  const p = Extractor.parseCellValue;
-  eq("currency $1,234.56", p("$1,234.56").type, "currency");
-  eq("currency value", p("$1,234.56").value, 1234.56);
-  eq("paren neg currency", p("($45.00)").value, -45);
-  eq("percent 12.5%", p("12.5%").type, "percent");
-  eq("percent value", p("12.5%").value, 12.5);
-  eq("plain int 42", p("42").type, "number");
-  eq("plain int value", p("42").value, 42);
-  eq("number with commas", p("1,000,000").value, 1000000);
-  eq("weekday", p("Monday").type, "weekday");
-  eq("string fallback", p("Mocha Latte").type, "string");
-  eq("empty cell", p("—").type, "empty");
+suite("parseCellValue", () => {
+  const cases = [
+    ["1,588.23", "number", 1588.23],
+    ["$1,588.23", "currency", 1588.23],
+    ["(45.50)", "currency", -45.5],
+    ["12.5%", "percent", 12.5],
+    ["Saturday", "weekday", "saturday"],
+    ["", "empty", null],
+    ["—", "empty", null],
+    ["Plain text", "string", "Plain text"],
+    ["4/27/2026", "date", null /* not strict */],
+  ];
+  for (const [raw, type, value] of cases) {
+    const c = Dataset.parseCellValue(raw);
+    assert(`type(${JSON.stringify(raw)}) === ${type}`, c.type === type, `got ${c.type}`);
+    if (value !== null) {
+      assert(`value(${JSON.stringify(raw)}) === ${JSON.stringify(value)}`, c.value === value, `got ${c.value}`);
+    }
+  }
+});
+
+// ---------- end-to-end on real xlsx --------------------------------------
+
+const wb = XLSX.readFile(FIXTURE);
+const sheet = wb.Sheets[wb.SheetNames[0]];
+const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
+const { datasets, parameters } = SheetParser.parseAOA(aoa, "Sales by Weekday.xlsx");
+const analyses = Analyzer.analyzeAll(datasets);
+
+suite("sheet-parser on real Sales+by+Weekday.xlsx", () => {
+  assert("captures parameters block (Business Dates etc.)", parameters.length >= 5);
+  assert(
+    "Business Dates parameter is present",
+    parameters.some((p) => p.key === "Business Dates" && /\d/.test(p.value))
+  );
+  assert("3 analyzable datasets (Location pivot, Day Part pivot, Items)", datasets.length === 3);
+  const big = datasets[datasets.length - 1];
+  assert("biggest dataset has 250 rows", big.rowCount === 250);
+  assert("biggest dataset is wide-weekday", big.kind === "wide-weekday");
+  assert(
+    "biggest dataset has all 7 weekday columns",
+    big.columns.filter((c) => c.isWeekday).length === 7
+  );
+  assert(
+    "biggest dataset has Week to Date column",
+    big.headers.some((h) => /week\s*to\s*date/i.test(h))
+  );
+});
+
+suite("analyzer.analyzeAll · summary card", () => {
+  const big = analyses[analyses.length - 1];
+  const summary = big.insights.find((i) => i.id === "summary");
+  assert("summary card present", !!summary);
+  const itemsObj = Object.fromEntries(summary.items.map((i) => [i.label, i.value]));
+  assert(`Week total === $6,261.50`, itemsObj["Week total"] === "$6,261.50", itemsObj["Week total"]);
+  assert(
+    `Best day === Saturday ($1,588.23)`,
+    itemsObj["Best day"] === "Saturday ($1,588.23)",
+    itemsObj["Best day"]
+  );
+  assert(
+    `Slowest day === Wednesday ($496.35)`,
+    itemsObj["Slowest day"] === "Wednesday ($496.35)",
+    itemsObj["Slowest day"]
+  );
+  assert(`Items captured === 249`, itemsObj["Items captured"] === "249", itemsObj["Items captured"]);
+  assert(
+    `Items with $0 all week === 42`,
+    itemsObj["Items with $0 all week"] === "42",
+    itemsObj["Items with $0 all week"]
+  );
+});
+
+suite("analyzer · staffing rules", () => {
+  const big = analyses[analyses.length - 1];
+  const up = big.insights.find((i) => i.id === "staff-up");
+  const down = big.insights.find((i) => i.id === "staff-down");
+  assert("staff-up exists", !!up);
+  assert("staff-down exists", !!down);
+  assert(
+    `staff-up row 1 === ['Saturday','$1,588.23']`,
+    up.table.rows[0][0] === "Saturday" && up.table.rows[0][1] === "$1,588.23",
+    JSON.stringify(up.table.rows[0])
+  );
+  assert(
+    `staff-down row 1 === ['Wednesday','$496.35']`,
+    down.table.rows[0][0] === "Wednesday" && down.table.rows[0][1] === "$496.35",
+    JSON.stringify(down.table.rows[0])
+  );
+});
+
+suite("analyzer · top movers / slow movers", () => {
+  const big = analyses[analyses.length - 1];
+  const top = big.insights.find((i) => i.id === "top-movers");
+  const slow = big.insights.find((i) => i.id === "slow-movers");
+  assert("top-movers exists", !!top);
+  assert("slow-movers exists", !!slow);
+
+  assert(
+    "top movers row 1 item === 'Ice Cream - Scooped'",
+    top.table.rows[0][0] === "Ice Cream - Scooped",
+    top.table.rows[0][0]
+  );
+  assert(
+    "top movers row 1 week total === $3,866.55",
+    top.table.rows[0][1] === "$3,866.55",
+    top.table.rows[0][1]
+  );
+  assert(
+    "top movers row 1 peak day mentions Saturday",
+    /Saturday/.test(top.table.rows[0][2]),
+    top.table.rows[0][2]
+  );
+
+  assert(
+    "slow movers row 1 item === 'Caramel Topping'",
+    slow.table.rows[0][0] === "Caramel Topping",
+    slow.table.rows[0][0]
+  );
+  assert(
+    "slow movers row 1 days active === '1/7'",
+    slow.table.rows[0][2] === "1/7",
+    slow.table.rows[0][2]
+  );
+});
+
+suite("analyzer · zero-movers and put-on-sale", () => {
+  const big = analyses[analyses.length - 1];
+  const zero = big.insights.find((i) => i.id === "zero-movers");
+  assert("zero-movers exists (42 items)", !!zero && zero.title.includes("42"));
+  const sale = big.insights.find((i) => i.id === "put-on-sale");
+  assert("put-on-sale exists", !!sale);
+  assert("put-on-sale lists at least 5 candidates", (sale && sale.table.rows.length) >= 5);
+});
+
+suite("analyzer · per-day make-more cards", () => {
+  const big = analyses[analyses.length - 1];
+  const sat = big.insights.find((i) => i.id === "make-more-saturday");
+  assert("make-more-saturday card exists", !!sat);
+  assert(
+    "Saturday top seller is 'Ice Cream - Scooped' at $1,011.27",
+    sat.table.rows[0][0] === "Ice Cream - Scooped" && sat.table.rows[0][1] === "$1,011.27",
+    JSON.stringify(sat.table.rows[0])
+  );
+  const wed = big.insights.find((i) => i.id === "make-more-wednesday");
+  assert(
+    "Wednesday top seller is 'Ice Cream - Scooped' at $347.58",
+    wed && wed.table.rows[0][0] === "Ice Cream - Scooped" && wed.table.rows[0][1] === "$347.58",
+    wed && JSON.stringify(wed.table.rows[0])
+  );
+});
+
+console.log(`\n${passed} passed · ${failed} failed`);
+if (failed) {
+  for (const f of failures) console.log("  -", f.name, f.detail || "");
+  process.exit(1);
 }
-
-// ---------------------------------------------------------------------------
-// 2. Build a fake dataset directly (skip DOM extraction in node) and run
-//    the analyzer against it.
-// ---------------------------------------------------------------------------
-
-function buildDataset(headers, rows) {
-  const raw = { kind: "html-table", title: "Test report", headers, rows };
-  return Extractor.normalizeDataset(raw);
-}
-
-console.log("\nSales by Weekday analysis:");
-{
-  const ds = buildDataset(
-    ["Weekday", "Net Sales", "Quantity"],
-    [
-      ["Monday", "$1,200.00", "300"],
-      ["Tuesday", "$1,100.00", "270"],
-      ["Wednesday", "$1,500.00", "350"],
-      ["Thursday", "$2,400.00", "510"],
-      ["Friday", "$3,800.00", "780"],
-      ["Saturday", "$4,600.00", "910"],
-      ["Sunday", "$2,000.00", "440"],
-    ]
-  );
-  const analysis = Analyzer.analyzeDataset(ds);
-  const ids = analysis.insights.map((c) => c.id);
-  ok("has summary card", ids.includes("summary"));
-  ok("has top-movers card", ids.includes("top-movers"));
-  ok("has slow-movers card", ids.includes("slow-movers"));
-  ok("has buy-more card", ids.includes("buy-more"));
-  ok("has staff-up card", ids.includes("staff-up"));
-  ok("has staff-down card", ids.includes("staff-down"));
-
-  const staffUp = analysis.insights.find((c) => c.id === "staff-up");
-  ok(
-    "Saturday is busiest weekday",
-    staffUp.table.rows[0][0] === "Saturday",
-    "got: " + JSON.stringify(staffUp.table.rows[0])
-  );
-
-  const staffDown = analysis.insights.find((c) => c.id === "staff-down");
-  ok(
-    "Tuesday is slowest weekday",
-    staffDown.table.rows[0][0] === "Tuesday",
-    "got: " + JSON.stringify(staffDown.table.rows[0])
-  );
-
-  ok(
-    "weekday detected as time column",
-    analysis.roles.weekday && analysis.roles.weekday.includes("Weekday")
-  );
-}
-
-console.log("\nMenu Item Sales analysis:");
-{
-  const ds = buildDataset(
-    ["Menu Item", "Quantity Sold", "Net Sales", "Cost", "Discount"],
-    [
-      ["Caramel Apple",  "120", "$960.00", "$300.00", "$0.00"],
-      ["Sea Salt Caramel Bark", "30", "$420.00", "$60.00", "$0.00"],
-      ["Tuxedo Fudge",   "80", "$640.00", "$240.00", "$10.00"],
-      ["Mackinac Island Fudge", "200", "$1,600.00", "$520.00", "$0.00"],
-      ["Almond Butter Toffee",  "12", "$216.00", "$30.00", "$0.00"],
-      ["Bear Claw",      "8",  "$80.00", "$28.00", "$0.00"],
-      ["Plain Chocolate Bar", "240", "$720.00", "$540.00", "$120.00"],
-    ]
-  );
-  const analysis = Analyzer.analyzeDataset(ds);
-  const byId = Object.fromEntries(analysis.insights.map((c) => [c.id, c]));
-
-  ok("has summary",     !!byId["summary"]);
-  ok("has top-movers",  !!byId["top-movers"]);
-  ok("has slow-movers", !!byId["slow-movers"]);
-  ok("has buy-more",    !!byId["buy-more"]);
-  ok("has put-on-sale", !!byId["put-on-sale"]);
-  ok("has margin-alerts", !!byId["margin-alerts"]);
-  ok("has discount-usage", !!byId["discount-usage"]);
-
-  const top = byId["top-movers"].table.rows[0][0];
-  ok("Mackinac Island Fudge is top mover", top === "Mackinac Island Fudge",
-    "got: " + top);
-
-  const slow = byId["slow-movers"].table.rows[0][0];
-  ok("Bear Claw is slowest mover", slow === "Bear Claw", "got: " + slow);
-
-  const margin = byId["margin-alerts"].table.rows[0][0];
-  ok("Plain Chocolate Bar has worst margin", margin === "Plain Chocolate Bar",
-    "got: " + margin);
-
-  const discount = byId["discount-usage"].table.rows[0][0];
-  ok("Plain Chocolate Bar tops discount watchlist", discount === "Plain Chocolate Bar",
-    "got: " + discount);
-}
-
-console.log("\nNo-revenue dataset still produces something:");
-{
-  const ds = buildDataset(
-    ["Region", "Stores"],
-    [["North", "3"], ["South", "5"], ["East", "2"]]
-  );
-  const analysis = Analyzer.analyzeDataset(ds);
-  ok("at least summary card present", analysis.insights.some((c) => c.id === "summary"));
-}
-
-// ---------------------------------------------------------------------------
-
-console.log(`\n${pass} passed, ${fail} failed`);
-if (fail > 0) process.exit(1);

@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Kilwins Simphony Analytics",
-  "description": "Scrapes report data from the Oracle Simphony reporting portal and generates actionable store-management recommendations.",
-  "version": "1.0.0",
+  "description": "Drop a Simphony report .xlsx export onto the dashboard and get actionable store-management recommendations. 100% local, no network calls.",
+  "version": "2.0.0",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_title": "Kilwins Simphony Analytics",
+    "default_title": "Open Kilwins Simphony Analytics dashboard",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -20,30 +20,5 @@
     "service_worker": "src/background/service-worker.js",
     "type": "module"
   },
-  "permissions": ["storage", "tabs", "scripting", "activeTab"],
-  "host_permissions": [
-    "https://*.oraclerestaurants.com/*",
-    "https://simphony-home.mtu9.oraclerestaurants.com/*"
-  ],
-  "content_scripts": [
-    {
-      "matches": [
-        "https://*.oraclerestaurants.com/*",
-        "https://simphony-home.mtu9.oraclerestaurants.com/*"
-      ],
-      "js": [
-        "src/lib/extractor.js",
-        "src/content/content.js"
-      ],
-      "css": ["src/content/content.css"],
-      "run_at": "document_idle",
-      "all_frames": true
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": ["src/dashboard/dashboard.html"],
-      "matches": ["<all_urls>"]
-    }
-  ]
+  "permissions": ["tabs"]
 }

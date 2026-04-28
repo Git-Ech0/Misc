@@ -1,7 +1,7 @@
 /*
  * Generic analysis engine for tabular Oracle Simphony data.
  *
- * Input:  one normalized dataset (from extractor.js)
+ * Input:  one normalized dataset (from sheet-parser.js)
  * Output: an array of "insight cards", each:
  *   {
  *     id: string,
@@ -18,6 +18,10 @@
  */
 (function (root) {
   "use strict";
+
+  const Dataset = (typeof require === "function")
+    ? require("./dataset.js")
+    : (root && root.KilwinsDataset);
 
   // ---------- column-role inference -----------------------------------------
 
@@ -421,7 +425,368 @@
 
   // ---------- analyzer entrypoint -------------------------------------------
 
+  // ---------- weekday-pivoted (wide) analysis -------------------------------
+
+  const WEEKDAY_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+  function isTotalLabel(s) {
+    if (Dataset && Dataset.isTotalLabel) return Dataset.isTotalLabel(s);
+    return s && /^(total|all|all\s*day|grand\s*total|subtotal|sum)$/i.test(String(s).trim());
+  }
+
+  function widePerRowSummary(ds) {
+    const weekdayCols = ds.columns.filter((c) => c.isWeekday);
+    const rollupCol = ds.columns.find((c) =>
+      /^(week\s*to\s*date|wtd|weekday\s*total|week\s*total|total)$/i.test(c.name.trim()) && c.isMetric
+    );
+    const dimCol = ds.columns.find((c) => c.isDimension) || ds.columns[0];
+
+    const summaries = [];
+    for (let i = 0; i < ds.parsedRows.length; i++) {
+      const row = ds.parsedRows[i];
+      const label = (row[dimCol.index] && row[dimCol.index].raw) || "";
+      const isTotal = isTotalLabel(label);
+      const weekdayValues = weekdayCols.map((c) => {
+        const cell = row[c.index];
+        const v = cell && (cell.type === "number" || cell.type === "currency") ? cell.value : null;
+        return { col: c, value: typeof v === "number" ? v : null };
+      });
+      const numeric = weekdayValues.filter((w) => typeof w.value === "number");
+      const sumWeek = numeric.reduce((s, w) => s + w.value, 0);
+      const rollupCell = rollupCol ? row[rollupCol.index] : null;
+      const rollup = rollupCell && (rollupCell.type === "number" || rollupCell.type === "currency")
+        ? rollupCell.value
+        : null;
+      const total = typeof rollup === "number" ? rollup : sumWeek;
+      let peak = null;
+      for (const w of numeric) {
+        if (peak == null || (w.value != null && w.value > peak.value)) peak = w;
+      }
+      const nonZero = numeric.filter((w) => w.value > 0).length;
+      summaries.push({
+        i,
+        label,
+        isTotal,
+        weekdayValues,
+        total,
+        peakWeekday: peak,
+        nonZeroCount: nonZero,
+        activeDayCount: nonZero,
+      });
+    }
+    return { summaries, weekdayCols, rollupCol, dimCol };
+  }
+
+  function widePickMetricType(ds) {
+    const weekdayCols = ds.columns.filter((c) => c.isWeekday);
+    if (weekdayCols.some((c) => c.type === "currency")) return "currency";
+    if (weekdayCols.some((c) => c.type === "percent")) return "percent";
+
+    // Heuristic: when the dataset's source / title / parameters mention a
+    // money concept and the numeric values look money-shaped (have cents),
+    // promote to currency.  This handles Oracle .xlsx exports where cells
+    // come through as plain "1,588.23" without a $ sign.
+    let nonZero = 0;
+    let withDecimals = 0;
+    for (const r of ds.parsedRows) {
+      for (const c of weekdayCols) {
+        const cell = r[c.index];
+        if (!cell || (cell.type !== "number" && cell.type !== "currency")) continue;
+        if (typeof cell.value !== "number" || cell.value === 0) continue;
+        nonZero += 1;
+        if (Math.round(cell.value * 100) !== Math.round(cell.value) * 100) withDecimals += 1;
+      }
+    }
+    const moneyContext = /sales|revenue|net|gross|amount|\$/i.test(
+      [ds.title || "", ds.source || "", (ds.parameters || []).map((p) => `${p.key} ${p.value}`).join(" ")].join(" ")
+    );
+    if (moneyContext && nonZero > 0 && withDecimals / nonZero >= 0.3) return "currency";
+    if (nonZero > 0 && withDecimals / nonZero >= 0.6) return "currency";
+    return "number";
+  }
+
+  function ruleWideTopMovers(ds, summ, metricType) {
+    const candidates = summ.summaries
+      .filter((s) => !s.isTotal && typeof s.total === "number" && s.total > 0)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10);
+    if (!candidates.length) return null;
+    return {
+      id: "top-movers",
+      title: "Sell & make more of these · Top weekly performers",
+      subtitle: "Highest total weekly sales. Lean into them in displays, promotions, and prep volume.",
+      tone: "positive",
+      table: {
+        headers: ["Item", "Week total", "Peak day"],
+        rows: candidates.map((s) => [
+          s.label,
+          fmtNumber(s.total, metricType),
+          s.peakWeekday ? `${s.peakWeekday.col.name} (${fmtNumber(s.peakWeekday.value, metricType)})` : "—",
+        ]),
+      },
+    };
+  }
+
+  function ruleWideSlowMovers(ds, summ, metricType) {
+    const candidates = summ.summaries
+      .filter((s) => !s.isTotal && typeof s.total === "number" && s.total > 0)
+      .sort((a, b) => a.total - b.total)
+      .slice(0, 10);
+    if (!candidates.length) return null;
+    return {
+      id: "slow-movers",
+      title: "Make less of these · Slowest weekly performers",
+      subtitle: "Lowest non-zero weekly sales. Cut prep volume to reduce waste — or remove from the menu.",
+      tone: "negative",
+      table: {
+        headers: ["Item", "Week total", "Days active"],
+        rows: candidates.map((s) => [
+          s.label,
+          fmtNumber(s.total, metricType),
+          `${s.activeDayCount}/${summ.weekdayCols.length}`,
+        ]),
+      },
+    };
+  }
+
+  function ruleWideZeroMovers(ds, summ, metricType) {
+    const candidates = summ.summaries
+      .filter((s) => !s.isTotal && typeof s.total === "number" && s.total === 0);
+    if (!candidates.length) return null;
+    const top = candidates.slice(0, 15);
+    return {
+      id: "zero-movers",
+      title: `Remove or rethink · ${candidates.length} item${candidates.length === 1 ? "" : "s"} sold $0 all week`,
+      subtitle: "Zero sales every day this week. Pull from the menu, swap with a tester, or run a clearance.",
+      tone: "warning",
+      table: {
+        headers: ["Item"],
+        rows: top.map((s) => [s.label]),
+      },
+    };
+  }
+
+  function ruleWidePutOnSale(ds, summ, metricType) {
+    const active = summ.summaries.filter((s) => !s.isTotal && typeof s.total === "number" && s.total > 0);
+    if (active.length < 6) return null;
+    const sorted = active.slice().sort((a, b) => a.total - b.total);
+    const q1Idx = Math.floor((sorted.length - 1) * 0.25);
+    const q1Threshold = sorted[q1Idx].total;
+    const candidates = sorted
+      .filter((s) => s.total <= q1Threshold && s.activeDayCount >= 1)
+      .slice(0, 10);
+    if (!candidates.length) return null;
+    return {
+      id: "put-on-sale",
+      title: "Put these on sale / discount",
+      subtitle: "Bottom-quartile movers — discount, bundle, or feature to clear product before waste.",
+      tone: "warning",
+      table: {
+        headers: ["Item", "Week total", "Days active"],
+        rows: candidates.map((s) => [
+          s.label,
+          fmtNumber(s.total, metricType),
+          `${s.activeDayCount}/${summ.weekdayCols.length}`,
+        ]),
+      },
+    };
+  }
+
+  function ruleWidePromote(ds, summ, metricType) {
+    // High peak-day spike but low average across the rest of the week
+    const active = summ.summaries.filter(
+      (s) => !s.isTotal && typeof s.total === "number" && s.total > 0 && s.peakWeekday
+    );
+    if (active.length < 4) return null;
+    const candidates = active
+      .map((s) => {
+        const peak = s.peakWeekday.value;
+        const others = s.weekdayValues.filter((w) => w !== s.peakWeekday && typeof w.value === "number");
+        const otherSum = others.reduce((a, w) => a + (w.value || 0), 0);
+        const otherDays = others.length || 1;
+        const otherMean = otherSum / otherDays;
+        const concentration = peak / Math.max(s.total, 1e-9);
+        return { s, peak, otherMean, concentration };
+      })
+      .filter((x) => x.concentration >= 0.6 && x.s.total > 0)
+      .sort((a, b) => b.concentration - a.concentration)
+      .slice(0, 8);
+    if (!candidates.length) return null;
+    return {
+      id: "promote",
+      title: "Promote these · One-day wonders",
+      subtitle: "Sales are heavily concentrated on a single day — try featuring or upselling on the rest.",
+      tone: "info",
+      table: {
+        headers: ["Item", "Peak day", "Peak share of week"],
+        rows: candidates.map(({ s, concentration }) => [
+          s.label,
+          s.peakWeekday ? `${s.peakWeekday.col.name} (${fmtNumber(s.peakWeekday.value, metricType)})` : "—",
+          (concentration * 100).toFixed(1) + "%",
+        ]),
+      },
+    };
+  }
+
+  function ruleWideStaffing(ds, summ, metricType) {
+    const totalRow = summ.summaries.find((s) => s.isTotal && /^total$/i.test(s.label.trim()))
+      || summ.summaries.find((s) => s.isTotal);
+    let perDay;
+    if (totalRow) {
+      perDay = totalRow.weekdayValues
+        .filter((w) => typeof w.value === "number")
+        .map((w) => ({ name: w.col.name, value: w.value }));
+    } else {
+      const groups = new Map();
+      for (const s of summ.summaries) {
+        if (s.isTotal) continue;
+        for (const w of s.weekdayValues) {
+          if (typeof w.value !== "number") continue;
+          groups.set(w.col.name, (groups.get(w.col.name) || 0) + w.value);
+        }
+      }
+      perDay = Array.from(groups.entries()).map(([name, value]) => ({ name, value }));
+    }
+    if (!perDay.length) return null;
+    const sorted = perDay.slice().sort((a, b) => b.value - a.value);
+    const top = sorted.slice(0, Math.min(3, sorted.length));
+    const bottom = sorted.slice(-Math.min(3, sorted.length)).reverse();
+    return [
+      {
+        id: "staff-up",
+        title: "Staff up · Busiest weekdays",
+        subtitle: "Highest total sales. Schedule extra hands and prep ahead.",
+        tone: "positive",
+        table: {
+          headers: ["Weekday", "Total sales"],
+          rows: top.map((d) => [d.name, fmtNumber(d.value, metricType)]),
+        },
+      },
+      {
+        id: "staff-down",
+        title: "Cut hours · Slowest weekdays",
+        subtitle: "Lowest total sales. Trim labor or run focused promos to lift traffic.",
+        tone: "warning",
+        table: {
+          headers: ["Weekday", "Total sales"],
+          rows: bottom.map((d) => [d.name, fmtNumber(d.value, metricType)]),
+        },
+      },
+    ];
+  }
+
+  function ruleWideMakeMoreOnDay(ds, summ, metricType) {
+    const cards = [];
+    const active = summ.summaries.filter((s) => !s.isTotal && typeof s.total === "number");
+    for (const wcol of summ.weekdayCols) {
+      const dayRanked = active
+        .map((s) => {
+          const cell = ds.parsedRows[s.i][wcol.index];
+          const v = cell && (cell.type === "number" || cell.type === "currency") ? cell.value : null;
+          return { s, v };
+        })
+        .filter((x) => typeof x.v === "number" && x.v > 0)
+        .sort((a, b) => b.v - a.v)
+        .slice(0, 5);
+      if (dayRanked.length === 0) continue;
+      cards.push({
+        id: `make-more-${wcol.name.toLowerCase()}`,
+        title: `Make more on ${wcol.name} · Top ${dayRanked.length} sellers`,
+        subtitle: `These items pulled the most ${wcol.name} sales last week. Prep more stock and feature them on this day.`,
+        tone: "info",
+        table: {
+          headers: ["Item", `${wcol.name} sales`],
+          rows: dayRanked.map(({ s, v }) => [s.label, fmtNumber(v, metricType)]),
+        },
+      });
+    }
+    return cards;
+  }
+
+  function ruleWideSummary(ds, summ, metricType) {
+    const totalRow = summ.summaries.find((s) => s.isTotal && /^total$/i.test(s.label.trim()));
+    const items = [];
+    items.push({ label: "Items captured", value: (summ.summaries.length - summ.summaries.filter((s) => s.isTotal).length).toLocaleString() });
+    items.push({ label: "Days analyzed", value: summ.weekdayCols.map((c) => c.name).join(" · ") });
+    if (totalRow) {
+      items.push({ label: "Week total", value: fmtNumber(totalRow.total, metricType) });
+      if (totalRow.peakWeekday) {
+        items.push({
+          label: "Best day",
+          value: `${totalRow.peakWeekday.col.name} (${fmtNumber(totalRow.peakWeekday.value, metricType)})`,
+        });
+      }
+      const numericVals = totalRow.weekdayValues.filter((w) => typeof w.value === "number");
+      if (numericVals.length) {
+        const sortedAsc = numericVals.slice().sort((a, b) => a.value - b.value);
+        const slow = sortedAsc[0];
+        items.push({
+          label: "Slowest day",
+          value: `${slow.col.name} (${fmtNumber(slow.value, metricType)})`,
+        });
+      }
+    } else {
+      let weekTotal = 0;
+      for (const s of summ.summaries) {
+        if (s.isTotal) continue;
+        if (typeof s.total === "number") weekTotal += s.total;
+      }
+      if (weekTotal > 0) items.push({ label: "Week total (computed)", value: fmtNumber(weekTotal, metricType) });
+    }
+    items.push({
+      label: "Items with $0 all week",
+      value: summ.summaries.filter((s) => !s.isTotal && s.total === 0).length.toLocaleString(),
+    });
+    return {
+      id: "summary",
+      title: "Snapshot",
+      subtitle: "Quick totals for this report.",
+      tone: "neutral",
+      items,
+    };
+  }
+
+  function analyzeWideWeekday(ds) {
+    const summ = widePerRowSummary(ds);
+    if (!summ.weekdayCols.length || !summ.summaries.length) return null;
+    const metricType = widePickMetricType(ds);
+
+    const insights = [];
+    insights.push(ruleWideSummary(ds, summ, metricType));
+
+    const staffing = ruleWideStaffing(ds, summ, metricType);
+    if (staffing) insights.push(...staffing);
+
+    const candidates = [
+      ruleWideTopMovers(ds, summ, metricType),
+      ruleWideSlowMovers(ds, summ, metricType),
+      ruleWidePutOnSale(ds, summ, metricType),
+      ruleWidePromote(ds, summ, metricType),
+      ruleWideZeroMovers(ds, summ, metricType),
+    ];
+    for (const c of candidates) if (c) insights.push(c);
+
+    const dayCards = ruleWideMakeMoreOnDay(ds, summ, metricType);
+    if (dayCards && dayCards.length) insights.push(...dayCards);
+
+    return {
+      datasetId: ds.id,
+      title: ds.title,
+      kind: ds.kind,
+      rowCount: ds.rowCount,
+      columnCount: ds.columnCount,
+      insights,
+    };
+  }
+
+  // ---------- analyzer entrypoint -------------------------------------------
+
   function analyzeDataset(ds) {
+    if (ds.kind === "wide-weekday") {
+      const out = analyzeWideWeekday(ds);
+      if (out) return out;
+    }
+
     const roles = classifyColumns(ds.columns);
     const primaryDims = pickPrimaryDimension(ds.columns, ds.parsedRows);
 
@@ -448,6 +813,7 @@
     return {
       datasetId: ds.id,
       title: ds.title,
+      kind: ds.kind,
       rowCount: ds.rowCount,
       columnCount: ds.columnCount,
       roles: Object.fromEntries(Object.entries(roles).map(([k, v]) => [k, v.map((c) => c.name)])),
