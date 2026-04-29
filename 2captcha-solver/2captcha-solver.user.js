@@ -1,16 +1,13 @@
 // ==UserScript==
-// @name         2Captcha Auto-Solver (Gemini Vision)
+// @name         2Captcha Auto-Solver (Puter AI)
 // @namespace    https://github.com/Git-Ech0/Misc
-// @version      1.0
-// @description  Press Z to auto-solve captchas on 2captcha.com using Google Gemini AI (free tier)
+// @version      2.0
+// @description  Press Z to auto-solve captchas on 2captcha.com — free, unlimited AI via Puter.js (no API key)
 // @author       Git-Ech0
 // @match        https://2captcha.com/*
 // @match        https://worker.2captcha.com/*
-// @grant        GM_xmlhttpRequest
-// @grant        GM_setValue
-// @grant        GM_getValue
-// @grant        GM_registerMenuCommand
-// @connect      generativelanguage.googleapis.com
+// @require      https://js.puter.com/v2/
+// @grant        none
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -18,9 +15,7 @@
   "use strict";
 
   /* ─── constants ─── */
-  const GEMINI_MODEL = "gemini-2.0-flash";
-  const GEMINI_ENDPOINT = (key) =>
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`;
+  const AI_MODEL = "openai/gpt-4.1-nano";
 
   const PROMPT =
     "You are solving a CAPTCHA image. Look at the image and provide ONLY the text/answer shown in it. " +
@@ -36,30 +31,6 @@
 
   /* ─── state ─── */
   let busy = false;
-
-  /* ─── settings helpers ─── */
-  function getApiKey() {
-    return GM_getValue("gemini_api_key", "");
-  }
-
-  function setApiKey(key) {
-    GM_setValue("gemini_api_key", key.trim());
-  }
-
-  function promptForApiKey() {
-    const current = getApiKey();
-    const msg =
-      "Enter your free Google Gemini API key.\n" +
-      "Get one at: https://aistudio.google.com/apikey\n\n" +
-      (current ? `Current key: ${current.slice(0, 8)}...` : "No key set yet.");
-    const key = prompt(msg, current);
-    if (key !== null) {
-      setApiKey(key);
-      showStatus("API key saved!", "lime");
-    }
-  }
-
-  GM_registerMenuCommand("Set Gemini API Key", promptForApiKey);
 
   /* ─── status overlay ─── */
   const overlay = document.createElement("div");
@@ -93,23 +64,16 @@
 
   /* ─── DOM finders ─── */
 
-  /**
-   * Find the captcha image element on the page.
-   * Uses several selector strategies ordered from most-specific to generic.
-   */
   function findCaptchaImage() {
     const selectors = [
-      // Known 2captcha worker selectors (React class-based)
       'img[class*="captcha" i]',
       'img[class*="Captcha" i]',
       'img[class*="cap_img" i]',
       'img[class*="CapImg" i]',
       'img[id*="captcha" i]',
-      // Image inside a captcha container
       '[class*="captcha" i] img',
       '[class*="Captcha" i] img',
       '[id*="captcha" i] img',
-      // Canvas-based captchas
       'canvas[class*="captcha" i]',
       '[class*="captcha" i] canvas',
     ];
@@ -119,8 +83,7 @@
       if (el) return el;
     }
 
-    // Fallback: find the largest visible <img> that looks like a captcha
-    // (not an icon, avatar, or logo)
+    // Fallback: find the largest visible <img> that isn't an icon/avatar/logo
     const imgs = [...document.querySelectorAll("img")].filter((img) => {
       const w = img.naturalWidth || img.offsetWidth;
       const h = img.naturalHeight || img.offsetHeight;
@@ -129,13 +92,11 @@
       if (src.includes("avatar") || src.includes("icon") || src.includes("logo"))
         return false;
       if (src.startsWith("data:image/svg")) return false;
-      // Must be visible
       const rect = img.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0;
     });
 
     if (imgs.length) {
-      // Sort by area descending and pick the best candidate
       imgs.sort((a, b) => {
         const areaA = a.offsetWidth * a.offsetHeight;
         const areaB = b.offsetWidth * b.offsetHeight;
@@ -147,9 +108,6 @@
     return null;
   }
 
-  /**
-   * Find the answer input field.
-   */
   function findAnswerInput() {
     const selectors = [
       'input[class*="captcha" i]',
@@ -173,8 +131,10 @@
       if (el && el.offsetParent !== null) return el;
     }
 
-    // Fallback: find visible text inputs near the captcha image
-    const inputs = [...document.querySelectorAll('input[type="text"], input:not([type])')];
+    // Fallback: find visible text inputs
+    const inputs = [
+      ...document.querySelectorAll('input[type="text"], input:not([type])'),
+    ];
     const visible = inputs.filter((inp) => {
       const rect = inp.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0 && inp.offsetParent !== null;
@@ -185,105 +145,29 @@
 
   /* ─── image capture ─── */
 
-  /**
-   * Convert an image or canvas element to a base64 data string (without the prefix).
-   */
-  async function elementToBase64(el) {
-    if (el.tagName === "CANVAS") {
-      return el.toDataURL("image/png").split(",")[1];
-    }
-
-    // For <img>, draw onto a canvas to get base64
-    // First try fetching the image directly for best quality
-    const src = el.src || el.currentSrc;
-    if (src) {
-      try {
-        // Try fetching as blob via GM_xmlhttpRequest to bypass CORS
-        const b64 = await new Promise((resolve, reject) => {
-          GM_xmlhttpRequest({
-            method: "GET",
-            url: src,
-            responseType: "blob",
-            onload: (resp) => {
-              const reader = new FileReader();
-              reader.onloadend = () => {
-                const result = reader.result;
-                resolve(result.split(",")[1]);
-              };
-              reader.onerror = reject;
-              reader.readAsDataURL(resp.response);
-            },
-            onerror: reject,
-          });
-        });
-        if (b64) return b64;
-      } catch {
-        // Fall through to canvas method
-      }
-    }
-
-    // Canvas fallback
+  function elementToFile(el) {
     const canvas = document.createElement("canvas");
-    canvas.width = el.naturalWidth || el.offsetWidth;
-    canvas.height = el.naturalHeight || el.offsetHeight;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(el, 0, 0);
-    return canvas.toDataURL("image/png").split(",")[1];
-  }
 
-  /* ─── Gemini API call ─── */
+    if (el.tagName === "CANVAS") {
+      canvas.width = el.width;
+      canvas.height = el.height;
+      canvas.getContext("2d").drawImage(el, 0, 0);
+    } else {
+      canvas.width = el.naturalWidth || el.offsetWidth;
+      canvas.height = el.naturalHeight || el.offsetHeight;
+      canvas.getContext("2d").drawImage(el, 0, 0);
+    }
 
-  function callGemini(apiKey, base64Image) {
-    return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method: "POST",
-        url: GEMINI_ENDPOINT(apiKey),
-        headers: { "Content-Type": "application/json" },
-        data: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: PROMPT },
-                {
-                  inline_data: {
-                    mime_type: "image/png",
-                    data: base64Image,
-                  },
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 256,
-          },
-        }),
-        onload: (resp) => {
-          try {
-            const json = JSON.parse(resp.responseText);
-            if (json.error) {
-              reject(new Error(json.error.message || JSON.stringify(json.error)));
-              return;
-            }
-            const text =
-              json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
-            resolve(text);
-          } catch (e) {
-            reject(new Error(`Parse error: ${resp.responseText.slice(0, 200)}`));
-          }
-        },
-        onerror: (err) =>
-          reject(new Error(`Network error: ${err.statusText || "unknown"}`)),
-        ontimeout: () => reject(new Error("Request timed out")),
-        timeout: 30000,
-      });
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => {
+        resolve(new File([blob], "captcha.png", { type: "image/png" }));
+      }, "image/png");
     });
   }
 
   /* ─── fill answer into React-controlled input ─── */
 
   function setInputValue(input, value) {
-    // React overrides the native setter, so we need to use the native descriptor
     const nativeSetter = Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype,
       "value"
@@ -295,7 +179,6 @@
       input.value = value;
     }
 
-    // Fire events so React picks up the change
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
     input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
@@ -310,10 +193,8 @@
       return;
     }
 
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      showStatus("No API key! Click Tampermonkey > Set Gemini API Key", "red");
-      promptForApiKey();
+    if (typeof puter === "undefined") {
+      showStatus("Puter.js not loaded — reload the page", "red");
       return;
     }
 
@@ -333,15 +214,29 @@
     showStatus("Capturing image...", "#0ff");
 
     try {
-      const b64 = await elementToBase64(imgEl);
-      if (!b64) throw new Error("Failed to capture image");
+      // Try passing the image URL directly first; fall back to File object
+      let media;
+      const src = imgEl.src || imgEl.currentSrc || "";
+      if (src && src.startsWith("http")) {
+        media = src;
+      } else {
+        media = await elementToFile(imgEl);
+      }
 
-      showStatus("Sending to Gemini AI...", "#0ff");
-      const answer = await callGemini(apiKey, b64);
+      showStatus("Sending to AI...", "#0ff");
+
+      const resp = await puter.ai.chat(PROMPT, media, {
+        model: AI_MODEL,
+        temperature: 0.1,
+        max_tokens: 256,
+      });
+
+      const answer =
+        (typeof resp === "string" ? resp : resp?.message?.content)?.trim() || "";
 
       if (!answer) {
         setInputValue(answerInput, "unsolvable");
-        showStatus("AI returned empty response -> unsolvable", "orange");
+        showStatus("AI returned empty -> unsolvable", "orange");
       } else {
         setInputValue(answerInput, answer);
         showStatus(`Answer: ${answer}`, "lime");
@@ -349,8 +244,13 @@
 
       answerInput.focus();
     } catch (err) {
-      showStatus(`Error: ${err.message}`, "red");
       console.error("[Z-Solver]", err);
+      const msg = err?.message || String(err);
+      if (msg.includes("auth") || msg.includes("sign")) {
+        showStatus("Sign in to Puter when prompted, then press Z again", "yellow");
+      } else {
+        showStatus(`Error: ${msg}`, "red");
+      }
     } finally {
       busy = false;
     }
@@ -361,7 +261,6 @@
   document.addEventListener(
     "keydown",
     (e) => {
-      // Only trigger on Z key when not typing in an input
       if (e.key.toLowerCase() !== "z") return;
       const tag = (e.target.tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || e.target.isContentEditable)
@@ -375,10 +274,9 @@
   );
 
   /* ─── init ─── */
-  showStatus("Ready — press Z to solve", "lime");
-  console.log("[Z-Solver] 2Captcha Auto-Solver loaded. Press Z to solve captcha.");
-
-  if (!getApiKey()) {
-    showStatus("Set your Gemini API key first! (Tampermonkey menu)", "yellow");
-  }
+  showStatus("Ready — press Z to solve (powered by Puter AI)", "lime");
+  console.log(
+    "[Z-Solver] 2Captcha Auto-Solver loaded. Press Z to solve. " +
+      "First use will prompt Puter sign-in (free, no API key needed)."
+  );
 })();
